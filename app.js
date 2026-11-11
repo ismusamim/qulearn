@@ -11,7 +11,7 @@ const LOGO = 'logo.png';
 const KEY = 'halaqat_v1';
 const SKEY = 'halaqat_session';
 const TABS = {
-  admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['teachers', 'المعلمون'], ['halaqat', 'الحلقات'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['settings', 'الإعدادات']],
+  admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['pending', 'بيانات معلّقة'], ['teachers', 'المعلمون'], ['halaqat', 'الحلقات'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['settings', 'الإعدادات']],
   teacher: [['att', 'الحضور'], ['mine', 'طلابي'], ['profile', 'ملفي'], ['news', 'الإعلانات']],
   supervisor: [['att', 'الحضور'], ['mine', 'الطلاب'], ['news', 'الإعلانات']],
   student: [['me', 'تقدمي'], ['hist', 'السجل'], ['news', 'الإعلانات']]
@@ -44,6 +44,9 @@ const PROF = {
     ['courses', 'الدورات والشهادات', 'textarea']
   ] }
 };
+/* مرادفات إضافية لعناوين أعمدة ملف المعلم عند الاستيراد */
+const PROF_SYN = { fullName: ['الاسم الرباعي'], birth: ['الميلاد', 'تاريخ الولادة'], email: ['البريد', 'الايميل', 'email'], address: ['السكن'], emergency: ['الطوارئ'], qual: ['المؤهل'], riwaya: ['رواية'], sanad: ['السند', 'الشيخ المجيز'], memorized: ['الأجزاء', 'عدد الأجزاء', 'المحفوظ'], exp: ['الخبرة'], specialty: ['التخصص'], courses: ['الدورات'], contract: ['التعاقد'], pay: ['المكافأة'] };
+const FTYPES = [['text', 'نص'], ['number', 'رقم'], ['date', 'تاريخ'], ['textarea', 'نص طويل']];
 const genPass = () => {
   const a = new Uint32Array(1);
   try { crypto.getRandomValues(a); } catch (e) { a[0] = Math.floor(Math.random() * 4294967296); }
@@ -76,7 +79,8 @@ function seed() {
     teachers: [{ id: t1, name: 'الشيخ أحمد', phone: '', pin: '0000' }],
     halaqat: [{ id: h1, name: 'حلقة الفرقان', teacherId: t1, supervisorId: s1, schedule: 'بعد صلاة العصر', place: 'المسجد الكبير' }],
     students: names.map(n => ({ id: uid(), name: n, halaqaId: h1, phone: '', pin: '0000' })),
-    attendance: [], records: [], news: []
+    attendance: [], records: [], news: [],
+    fields: { students: [], teachers: [] }, pending: []
   };
 }
 /* ترقية البيانات القديمة: الإداري صار حسابًا باسم، وأُضيف المشرفون */
@@ -84,6 +88,10 @@ function migrate(d) {
   d.settings = d.settings || { org: 'إدارة الحلقات القرآنية' };
   if (!Array.isArray(d.admins) || !d.admins.length) d.admins = [{ id: uid(), name: 'المدير', pin: d.settings.adminPin || '1234' }];
   if (!Array.isArray(d.supervisors)) d.supervisors = [];
+  /* حقول يضيفها الإداري من الاستيراد، وأعمدة مستوردة تنتظر الاعتماد */
+  if (!d.fields || typeof d.fields !== 'object') d.fields = {};
+  ['students', 'teachers'].forEach(k => { if (!Array.isArray(d.fields[k])) d.fields[k] = []; });
+  if (!Array.isArray(d.pending)) d.pending = [];
   delete d.settings.adminPin;
   return d;
 }
@@ -268,7 +276,7 @@ function render() {
   const who = ROLE_L[role] + ': ' + me().name;
   const sw = sameName().length ? '<button class="btn" data-act="switchMode">تبديل الوضع</button>' : '';
   $app.innerHTML = `<header class="top"><div class="brand"><img class="hlogo" src="${LOGO}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div><div class="hactions">${sw}<button class="btn" data-act="logout">خروج</button>${role === 'admin' ? `<button type="button" class="iconbtn ${ui.tab === 'settings' ? 'on' : ''}" data-act="panel" title="لوحة التحكم" aria-label="لوحة التحكم">${ICONS.gear}</button>` : ''}</div></header>
-  <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}">${l}</button>`).join('')}</nav>
+  <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'pending' && db.pending.length ? ` <span class="count">${db.pending.length}</span>` : ''}</button>`).join('')}</nav>
   <main>${VIEWS[role][ui.tab]()}</main>`;
 }
 
@@ -309,9 +317,26 @@ const adminViews = {
     <div class="note">${tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
     ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>كلمة المرور</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
+  pending() {
+    const kindL = { students: 'الطلاب', teachers: 'المعلمون' };
+    const cards = db.pending.map(p => {
+      const dest = ['<option value="new">إنشاء حقل جديد بهذا الاسم</option>', ...fieldTargets(p.kind).filter(t => t.id !== 'core:halaqa' && t.id !== 'core:pin').map(t => `<option value="${esc(t.id)}">ربط بالحقل الموجود: ${esc(t.label)}</option>`)].join('');
+      const vals = p.values.map((x, i) => { const m = byId(db[p.kind], x.mid); return m ? `<tr><td>${esc(m.name)}</td><td><input data-pv="${i}" value="${esc(x.v)}"></td></tr>` : ''; }).join('');
+      return `<div class="card" data-pcard="${esc(p.id)}"><div class="bar"><h2 class="grow" style="margin:0">العمود «${esc(p.header)}»</h2><span class="tag">${kindL[p.kind] || ''} — ${esc(p.date)}</span></div>
+      <div class="pform"><label>اسم الحقل<input data-pl value="${esc(p.header)}"></label>
+      <label>النوع<select data-pt>${FTYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+      <label>الوجهة<select data-pd>${dest}</select></label></div>
+      ${vals ? `<div class="tbl pvals"><table><tr><th>العضو</th><th>القيمة (يمكن تعديلها)</th></tr>${vals}</table></div>` : empty('لم يعد أصحاب هذه القيم موجودين.')}
+      <div class="row"><button class="btn primary" data-act="approvePending" data-id="${esc(p.id)}">اعتماد</button><button class="btn danger" data-act="dropPending" data-id="${esc(p.id)}">حذف</button></div></div>`;
+    }).join('');
+    const fl = ['teachers', 'students'].flatMap(k => db.fields[k].map(f => `<tr><td>${esc(f.label)}</td><td>${kindL[k]}</td><td>${esc((FTYPES.find(t => t[0] === f.type) || FTYPES[0])[1])}</td><td><button class="btn sm danger" data-act="delField" data-k="${k}" data-id="${esc(f.key)}">حذف</button></td></tr>`)).join('');
+    return `<div class="note">عند استيراد ملف، الأعمدة التي لها نظير في النظام تُستورد مباشرة في مكانها، والأعمدة التي ليس لها نظير تُحفظ هنا. راجع كل عمود: عدّل اسمه ونوعه وقيمه، ثم اعتمد إنشاء حقل جديد له، أو اربطه بحقل موجود.</div>
+    ${cards || `<div class="card">${empty('لا توجد بيانات معلّقة.')}</div>`}
+    <div class="card"><h2>الحقول المضافة</h2>${fl ? `<div class="tbl"><table><tr><th>الحقل</th><th>لـ</th><th>النوع</th><th></th></tr>${fl}</table></div>` : empty('لم تُضف حقول بعد. تظهر هنا الحقول التي تعتمدها من البيانات المعلّقة.')}</div>`;
+  },
   teachers() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">المعلمون</h2><button class="btn primary" data-act="addTeacher">+ معلم</button></div>
-    ${db.teachers.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الجوال</th><th>الحلقات</th><th></th></tr>${db.teachers.map(t => `<tr><td>${esc(t.name)}</td><td>${esc(t.phone)}</td><td>${db.halaqat.filter(h => h.teacherId === t.id).length}</td><td><button class="btn sm" data-act="editTeacher" data-id="${t.id}">تعديل</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="personal">شخصية</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="admin">إدارية</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="tech">فنية</button><button class="btn sm danger" data-act="delTeacher" data-id="${t.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد معلمون.')}</div>`;
+    ${db.teachers.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الجوال</th><th>الحلقات</th><th></th></tr>${db.teachers.map(t => `<tr><td>${esc(t.name)}</td><td>${esc(t.phone)}</td><td>${db.halaqat.filter(h => h.teacherId === t.id).length}</td><td><button class="btn sm" data-act="editTeacher" data-id="${t.id}">تعديل</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="personal">شخصية</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="admin">إدارية</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="tech">فنية</button>${db.fields.teachers.length ? `<button class="btn sm" data-act="editExtra" data-k="teachers" data-id="${t.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delTeacher" data-id="${t.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد معلمون.')}</div>`;
   },
   halaqat() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الحلقات</h2><button class="btn primary" data-act="addHalaqa">+ حلقة</button></div>
@@ -322,7 +347,7 @@ const adminViews = {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الطلاب</h2>
     <select data-change="fh"><option value="">كل الحلقات</option>${db.halaqat.map(h => `<option value="${esc(h.id)}" ${h.id === ui.fh ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select>
     <button class="btn primary" data-act="addStudent">+ طالب</button></div>
-    ${list.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الحلقة</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${list.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(hName(s.halaqaId))}</td><td>${esc(lastHifz(s.id))}</td><td>${attRate(s.id)}</td><td><button class="btn sm" data-act="hist" data-id="${s.id}">السجل</button><button class="btn sm" data-act="editStudent" data-id="${s.id}">تعديل</button><button class="btn sm danger" data-act="delStudent" data-id="${s.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب.')}</div>`;
+    ${list.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الحلقة</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${list.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(hName(s.halaqaId))}</td><td>${esc(lastHifz(s.id))}</td><td>${attRate(s.id)}</td><td><button class="btn sm" data-act="hist" data-id="${s.id}">السجل</button><button class="btn sm" data-act="editStudent" data-id="${s.id}">تعديل</button>${db.fields.students.length ? `<button class="btn sm" data-act="editExtra" data-k="students" data-id="${s.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delStudent" data-id="${s.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب.')}</div>`;
   },
   news() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الإعلانات</h2><button class="btn primary" data-act="addNews">+ إعلان</button></div>
@@ -361,11 +386,15 @@ const teacherViews = {
   },
   profile() {
     const t = byId(db.teachers, session.id);
-    const g = PROF[ui.psub] ? ui.psub : 'personal', G = PROF[g];
+    const XF = db.fields.teachers;
+    const subs = Object.entries(PROF).map(([k, v]) => [k, v.label]).concat(XF.length ? [['extra', 'بيانات إضافية']] : []);
+    const g = PROF[ui.psub] ? ui.psub : 'personal', G = PROF[g], cur = ui.psub === 'extra' && XF.length ? 'extra' : g;
+    const bar = `<div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === cur ? 'on' : ''}" data-act="psub" data-v="${k}">${l}</button>`).join('')}</div>`;
+    if (cur === 'extra') return `<div class="card">${bar}<div class="tbl"><table>${XF.map(f => `<tr><th style="width:38%">${esc(f.label)}</th><td>${esc((t.extra || {})[f.key] || '—')}</td></tr>`).join('')}</table></div><div class="row"><button class="btn primary" data-act="editExtra" data-k="teachers" data-id="${t.id}">تعديل البيانات الإضافية</button></div></div>`;
     const rows = G.fields.map(f => `<tr><th style="width:38%">${esc(f[1])}</th><td>${esc(pv(t, g, f[0]) || '—')}</td></tr>`).join('');
     const mine = myHalaqat();
     const extra = g === 'admin' ? `<tr><th>الحلقات المسندة</th><td>${esc(mine.map(h => h.name).join('، ') || '—')}</td></tr><tr><th>عدد الطلاب</th><td>${db.students.filter(s => mine.some(h => h.id === s.halaqaId)).length}</td></tr>` : '';
-    return `<div class="card"><div class="bar">${Object.entries(PROF).map(([k, v]) => `<button class="btn ${k === g ? 'on' : ''}" data-act="psub" data-v="${k}">${v.label}</button>`).join('')}</div>
+    return `<div class="card">${bar}
     <div class="tbl"><table>${rows}${extra}</table></div>
     ${G.adminOnly ? '<p class="muted" style="margin-bottom:0">هذه البيانات تُدار من قِبل الإدارة، ويمكنك الاطلاع عليها فقط.</p>' : `<div class="row"><button class="btn primary" data-act="editProf" data-id="${t.id}" data-g="${g}">تعديل ${esc(G.label)}</button></div>`}</div>`;
   },
@@ -379,6 +408,7 @@ const studentViews = {
     const stats = [[lastHifz(s.id), 'آخر موضع حفظ'], [hifzAyat(s.id), 'آيات مسجّلة حفظًا'], [attRate(s.id), 'نسبة الحضور'], [recsOf(s.id).length, 'عدد التسميعات']];
     return `<div class="card"><h2>أهلًا ${esc(s.name)}</h2><p class="muted" style="margin:0">الحلقة: ${esc(hName(s.halaqaId))} — المكان: ${esc(byId(db.halaqat, s.halaqaId)?.place || '—')} — المعلم: ${esc(tName(byId(db.halaqat, s.halaqaId)?.teacherId))}</p></div>
     <div class="grid">${stats.map(([n, l]) => `<div class="stat"><b style="font-size:1.2rem">${esc(n)}</b><span>${l}</span></div>`).join('')}</div>
+    ${db.fields.students.some(f => (s.extra || {})[f.key]) ? `<div class="card"><h2>بياناتي</h2><div class="tbl"><table>${db.fields.students.filter(f => (s.extra || {})[f.key]).map(f => `<tr><th style="width:38%">${esc(f.label)}</th><td>${esc(s.extra[f.key])}</td></tr>`).join('')}</table></div></div>` : ''}
     <div class="card"><h2>آخر التسميعات</h2>${recsOf(s.id).slice(0, 5).map(r => `<div class="news">${esc(recLine(r))} — <b>${esc(r.grade)}</b><br><small>${esc(r.date)} ${esc(r.note)}</small></div>`).join('') || empty('لا توجد تسجيلات بعد.')}</div>`;
   },
   hist: () => `<div class="card"><h2>سجل التسميع</h2>${historyTable(session.id)}</div>`,
@@ -481,25 +511,48 @@ async function fetchSheet(url) {
   return parseCSV(t);
 }
 
-/* تحويل الجدول إلى صفوف أعضاء، مع كشف أعمدة العناوين والمكرر */
+/* الحقول التي يمكن أن تكون «نظيرًا» لعمود في الملف المستورد */
+function fieldTargets(kind) {
+  const L = [{ id: 'core:phone', label: kind === 'students' ? 'جوال ولي الأمر' : 'الجوال', syn: HDR.phone }, { id: 'core:pin', label: 'كلمة المرور', syn: HDR.pin }];
+  if (kind === 'students') L.push({ id: 'core:halaqa', label: 'الحلقة', syn: HDR.halaqa });
+  if (kind === 'teachers') Object.entries(PROF).forEach(([g, G]) => G.fields.forEach(f => { if (f[0] !== 'phone') L.push({ id: `prof:${g}:${f[0]}`, label: f[1], syn: [f[1].replace(/\s*\(.*\)\s*/, ''), ...(PROF_SYN[f[0]] || [])] }); }));
+  (db.fields[kind] || []).forEach(f => L.push({ id: 'extra:' + f.key, label: f.label, syn: [] }));
+  return L;
+}
+function setField(m, id, v) {
+  const [t, a, b] = id.split(':');
+  if (t === 'core') { if (a === 'phone') m.phone = v; else if (a === 'pin') m.pin = v; }
+  else if (t === 'prof') { m[a] = m[a] || {}; m[a][b] = v; }
+  else if (t === 'extra') { m.extra = m.extra || {}; m.extra[a] = v; }
+}
+
+/* تحويل الجدول إلى صفوف أعضاء: الأعمدة التي لها نظير تُربط بحقلها، والباقي يُجمع لتبويب «بيانات معلّقة» */
 function importRows(table, kind) {
   const grid = table.map(r => Array.from(r || [], c => String(c ?? '').trim()));
-  let hi = -1, map = {};
+  let hi = -1, nameCol = -1;
   for (let i = 0; i < Math.min(grid.length, 5) && hi < 0; i++) {
-    const m = {};
-    grid[i].forEach((c, j) => { const k = hkey(c); for (const f in HDR) if (m[f] == null && HDR[f].some(x => hkey(x) === k)) m[f] = j; });
-    if (m.name != null) { hi = i; map = m; }
+    const j = grid[i].findIndex(c => HDR.name.some(x => hkey(x) === hkey(c)));
+    if (j >= 0) { hi = i; nameCol = j; }
   }
   if (hi < 0) return { err: 'لم أجد عمود «الاسم» في الصف الأول. استخدم القالب أو أضف عنوانًا للعمود.' };
+  const targets = fieldTargets(kind), cols = [], loose = [];
+  grid[hi].forEach((h, j) => {
+    if (!h || j === nameCol) return;
+    const k = hkey(h), t = targets.find(x => [x.label, ...x.syn].some(y => hkey(y) === k));
+    if (t && !cols.some(c => c.id === t.id)) cols.push({ j, id: t.id, header: h, label: t.label });
+    else if (!t) loose.push({ j, header: h });
+  });
+  const dg = s => String(s || '').replace(/[٠-٩]/g, c => c.charCodeAt(0) - 1632).replace(/[۰-۹]/g, c => c.charCodeAt(0) - 1776).trim();
   const seen = new Set(db[kind].map(m => norm(m.name))), rows = [];
   for (const r of grid.slice(hi + 1)) {
-    const name = (r[map.name] || '').replace(/\s+/g, ' ');
+    const name = (r[nameCol] || '').replace(/\s+/g, ' ');
     if (!name) continue;
     const k = norm(name), dup = seen.has(k); seen.add(k);
-    const dg = s => String(s || '').replace(/[٠-٩]/g, c => c.charCodeAt(0) - 1632).replace(/[۰-۹]/g, c => c.charCodeAt(0) - 1776).trim();
-    rows.push({ name, halaqa: kind === 'students' ? (r[map.halaqa] || '') : '', phone: dg(r[map.phone]), pin: dg(r[map.pin]), dup });
+    const vals = {};
+    cols.forEach(c => { vals[c.id] = c.id === 'core:halaqa' ? (r[c.j] || '') : dg(r[c.j]); });
+    rows.push({ name, dup, vals, halaqa: vals['core:halaqa'] || '', loose: loose.map(l => dg(r[l.j])) });
   }
-  return rows.length ? { rows } : { err: 'لا توجد صفوف بيانات بعد صف العناوين.' };
+  return rows.length ? { rows, cols, loose } : { err: 'لا توجد صفوف بيانات بعد صف العناوين.' };
 }
 
 function openImport(kind) {
@@ -507,7 +560,7 @@ function openImport(kind) {
   const ov = document.createElement('div');
   ov.className = 'overlay';
   ov.innerHTML = `<div class="modal wide"><h2>استيراد ${isS ? 'الطلاب' : 'المعلمين'}</h2>
-  <div class="note">الصف الأول عناوين الأعمدة: ${isS ? 'الاسم، الحلقة، الجوال، كلمة المرور' : 'الاسم، الجوال، كلمة المرور'}. الاسم وحده مطلوب، وتُنشأ كلمة المرور تلقائيًا إن تُركت فارغة، والأسماء المكررة تُتجاهل.</div>
+  <div class="note">الصف الأول عناوين الأعمدة: ${isS ? 'الاسم، الحلقة، الجوال، كلمة المرور' : 'الاسم، الجوال، كلمة المرور'}. الاسم وحده مطلوب، وتُنشأ كلمة المرور تلقائيًا إن تُركت فارغة، والأسماء المكررة تُتجاهل. أي عمود آخر ليس له نظير في النظام يُحفظ في «بيانات معلّقة» لاعتماده.</div>
   <div class="bar"><label class="btn" style="margin:0">اختيار ملف Excel أو CSV<input type="file" id="imf" accept=".xlsx,.csv,.tsv,.txt" hidden></label><button type="button" class="btn sm" id="imt">تحميل قالب</button></div>
   <label>أو الصق خلايا منسوخة من Excel أو Google Sheets<textarea id="imp" rows="3"></textarea></label>
   <label>أو رابط Google Sheets (مشارك لكل من لديه الرابط)<input id="imu" type="url" dir="ltr" placeholder="https://docs.google.com/spreadsheets/d/..."></label>
@@ -516,7 +569,7 @@ function openImport(kind) {
   <div class="row"><button type="button" class="btn primary" id="imok" disabled>استيراد</button><button type="button" class="btn" data-close>إغلاق</button></div></div>`;
   document.body.appendChild(ov);
   const $ = s => ov.querySelector(s);
-  let parsed = [], createH = true;
+  let parsed = [], cols = [], loose = [], createH = true;
   $('[data-close]').onclick = () => ov.remove();
 
   const msg = (t, bad) => {
@@ -527,9 +580,12 @@ function openImport(kind) {
     const fresh = parsed.filter(r => !r.dup), dups = parsed.length - fresh.length;
     const known = new Set(db.halaqat.map(h => norm(h.name)));
     const newH = isS ? new Set(fresh.filter(r => r.halaqa && !known.has(norm(r.halaqa))).map(r => norm(r.halaqa))) : new Set();
+    const chip = t => `<span class="chip">${esc(t)}</span>`;
     $('#imprev').innerHTML = `<p style="margin:.2rem 0 .6rem"><b>${fresh.length}</b> جاهز للاستيراد${dups ? ` — ${dups} مكرر سيُتجاهل` : ''}</p>
+    ${cols.length ? `<div class="note ok">أعمدة لها نظير وستُستورد في مكانها: ${cols.map(c => chip(c.header === c.label ? c.label : `${c.header} ← ${c.label}`)).join(' ')}</div>` : ''}
+    ${loose.length ? `<div class="note">أعمدة ليس لها نظير (${loose.length}): ${loose.map(l => chip(l.header)).join(' ')}<br>ستُحفظ قيمها في تبويب «بيانات معلّقة» لتراجعها وتعدّلها، ثم تعتمد إنشاء حقل لكل منها.</div>` : ''}
     ${newH.size ? `<label style="display:flex;gap:.5rem;align-items:center;color:var(--text)"><input type="checkbox" id="imh" style="width:auto;margin:0" ${createH ? 'checked' : ''}> إنشاء ${newH.size} حلقة غير موجودة تلقائيًا</label>` : ''}
-    <div class="tbl"><table><tr><th>الاسم</th>${isS ? '<th>الحلقة</th>' : ''}<th>الجوال</th><th>الحالة</th></tr>${parsed.slice(0, 8).map(r => `<tr><td>${esc(r.name)}</td>${isS ? `<td>${esc(r.halaqa || '—')}</td>` : ''}<td>${esc(r.phone || '—')}</td><td>${r.dup ? '<span class="tag" style="background:#fbeceb;color:var(--red)">مكرر</span>' : '<span class="tag">جديد</span>'}</td></tr>`).join('')}</table></div>
+    <div class="tbl"><table><tr><th>الاسم</th>${isS ? '<th>الحلقة</th>' : ''}<th>الجوال</th><th>الحالة</th></tr>${parsed.slice(0, 8).map(r => `<tr><td>${esc(r.name)}</td>${isS ? `<td>${esc(r.halaqa || '—')}</td>` : ''}<td>${esc(r.vals['core:phone'] || '—')}</td><td>${r.dup ? '<span class="tag" style="background:#fbeceb;color:var(--red)">مكرر</span>' : '<span class="tag">جديد</span>'}</td></tr>`).join('')}</table></div>
     ${parsed.length > 8 ? `<p class="muted" style="margin:.4rem 0 0">… و${parsed.length - 8} صفوف أخرى</p>` : ''}`;
     const cb = $('#imh'); if (cb) cb.onchange = () => { createH = cb.checked; };
     $('#imok').disabled = !fresh.length;
@@ -537,7 +593,7 @@ function openImport(kind) {
   function go(table) {
     const r = importRows(table, kind);
     if (r.err) { msg(r.err, true); return; }
-    parsed = r.rows; preview();
+    parsed = r.rows; cols = r.cols; loose = r.loose; preview();
   }
 
   $('#imf').onchange = async e => {
@@ -571,7 +627,8 @@ function openImport(kind) {
   };
   $('#imok').onclick = () => {
     const hmap = new Map(db.halaqat.map(h => [norm(h.name), h.id]));
-    let n = 0, nh = 0;
+    let n = 0, nh = 0, np = 0;
+    const made = [];
     parsed.filter(r => !r.dup).forEach(r => {
       let hid = '';
       if (isS && r.halaqa) {
@@ -579,13 +636,19 @@ function openImport(kind) {
         if (hmap.has(k)) hid = hmap.get(k);
         else if (createH) { hid = uid(); db.halaqat.push({ id: hid, name: r.halaqa, teacherId: '', schedule: '', place: '' }); hmap.set(k, hid); nh++; }
       }
-      const id = uid(), pin = r.pin || genPass();
-      db[kind].push(isS ? { id, name: r.name, halaqaId: hid, phone: r.phone, pin } : { id, name: r.name, phone: r.phone, pin });
-      if (!r.pin) ui.shown[id] = true;
+      const id = uid(), given = r.vals['core:pin'], pin = given || genPass();
+      const m = isS ? { id, name: r.name, halaqaId: hid, phone: '', pin } : { id, name: r.name, phone: '', pin };
+      cols.forEach(c => { if (c.id !== 'core:halaqa' && c.id !== 'core:pin' && r.vals[c.id]) setField(m, c.id, r.vals[c.id]); });
+      db[kind].push(m); made.push([id, r]);
+      if (!given) ui.shown[id] = true;
       n++;
     });
+    loose.forEach((l, i) => {
+      const values = made.map(([mid, r]) => ({ mid, v: r.loose[i] })).filter(x => x.v);
+      if (values.length) { db.pending.push({ id: uid(), kind, header: l.header, values, date: today() }); np++; }
+    });
     ov.remove(); save(); render();
-    toast(`تم استيراد ${n} ${isS ? 'طالب' : 'معلم'}${nh ? ` وإنشاء ${nh} حلقة` : ''}`);
+    toast(`تم استيراد ${n} ${isS ? 'طالب' : 'معلم'}${nh ? ` وإنشاء ${nh} حلقة` : ''}${np ? ` — ${np} عمود في «بيانات معلّقة»` : ''}`);
   };
 }
 
@@ -675,6 +738,37 @@ const A = {
       return;
     }
     ask('حذف المشرف؟ ستبقى حلقاته بدون مشرف.', () => { db.supervisors = db.supervisors.filter(x => x.id !== d.id); db.halaqat.forEach(h => { if (h.supervisorId === d.id) h.supervisorId = ''; }); save(); render(); });
+  },
+  approvePending: d => {
+    const p = db.pending.find(x => x.id === d.id), card = document.querySelector(`[data-pcard="${d.id}"]`);
+    if (!p || !card) return;
+    const label = card.querySelector('[data-pl]').value.trim(), type = card.querySelector('[data-pt]').value, dest = card.querySelector('[data-pd]').value;
+    let id = dest;
+    if (dest === 'new') {
+      if (!label) { toast('اكتب اسم الحقل'); return; }
+      if (fieldTargets(p.kind).some(t => hkey(t.label) === hkey(label)) || hkey(label) === hkey('الاسم')) { toast('يوجد حقل بهذا الاسم؛ اختر «ربط بالحقل الموجود» أو غيّر الاسم'); return; }
+      const key = 'f_' + uid();
+      db.fields[p.kind].push({ key, label, type });
+      id = 'extra:' + key;
+    }
+    let n = 0;
+    card.querySelectorAll('[data-pv]').forEach(inp => {
+      const x = p.values[+inp.dataset.pv], m = x && byId(db[p.kind], x.mid), v = inp.value.trim();
+      if (m && v) { setField(m, id, v); n++; }
+    });
+    db.pending = db.pending.filter(x => x !== p); save(); render();
+    toast(`تم الاعتماد — ${n} قيمة`);
+  },
+  dropPending: d => ask('حذف بيانات هذا العمود نهائيًا دون اعتمادها؟', () => { db.pending = db.pending.filter(x => x.id !== d.id); save(); render(); }),
+  delField: d => ask('حذف هذا الحقل وكل قيمه من الأعضاء؟', () => { db.fields[d.k] = db.fields[d.k].filter(f => f.key !== d.id); db[d.k].forEach(m => { if (m.extra) delete m.extra[d.id]; }); save(); render(); }),
+  editExtra: d => {
+    const m = byId(db[d.k] || [], d.id), F = (db.fields[d.k] || []);
+    if (!m || !F.length) return;
+    if (session.role !== 'admin' && !(session.role === 'teacher' && d.k === 'teachers' && session.id === m.id)) { toast('غير مصرح'); return; }
+    openForm('بيانات إضافية: ' + m.name, F.map(f => ({ name: f.key, label: f.label, type: f.type || 'text', value: (m.extra || {})[f.key] || '' })), v => {
+      m.extra = m.extra || {};
+      F.forEach(f => { m.extra[f.key] = (v[f.key] ?? '').trim(); });
+    });
   },
   delStudent: d => ask('حذف الطالب وكل سجلاته؟', () => { db.students = db.students.filter(s => s.id !== d.id); db.records = db.records.filter(r => r.studentId !== d.id); db.attendance = db.attendance.filter(a => a.studentId !== d.id); save(); render(); }),
 
