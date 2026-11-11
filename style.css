@@ -1,0 +1,88 @@
+:root{
+  --green:#0f6b4f; --green-d:#0a4d38; --green-l:#e6f4ee;
+  --gold:#b8892b; --bg:#f6f7f5; --card:#fff; --text:#1d2b25; --muted:#6b7a73;
+  --line:#e2e8e4; --red:#b3372f; --amber:#b7791f; --radius:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:"Segoe UI",Tahoma,"Noto Naskh Arabic","Noto Sans Arabic",Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+h1,h2,h3{margin:0}
+h2{font-size:1.15rem;margin-bottom:.75rem}
+main{max-width:1000px;margin:0 auto;padding:1rem}
+.top{background:var(--green);color:#fff;display:flex;justify-content:space-between;align-items:center;padding:.8rem 1rem}
+.top h1{font-size:1.1rem}
+.top small{opacity:.85}
+.top .btn{background:transparent;color:#fff;border-color:rgba(255,255,255,.5)}
+.tabs{display:flex;gap:.25rem;overflow-x:auto;background:var(--green-d);padding:0 .5rem;position:sticky;top:0;z-index:5}
+.tabs button{background:none;border:0;color:#cfe8dd;padding:.7rem 1rem;font:inherit;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent}
+.tabs button.on{color:#fff;border-color:var(--gold);font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;margin-bottom:1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:.9rem;text-align:center}
+.stat b{display:block;font-size:1.6rem;color:var(--green)}
+.stat span{color:var(--muted);font-size:.9rem}
+.bar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.75rem}
+.bar .grow{flex:1}
+.btn{font:inherit;border:1px solid var(--line);background:#fff;color:var(--text);padding:.4rem .85rem;border-radius:8px;cursor:pointer}
+.btn:hover{background:var(--green-l)}
+.btn.primary{background:var(--green);color:#fff;border-color:var(--green)}
+.btn.primary:hover{background:var(--green-d)}
+.btn.danger{color:var(--red);border-color:#e8c4c0}
+.btn.sm{padding:.2rem .6rem;font-size:.85rem}
+.btn.on{background:var(--green);color:#fff;border-color:var(--green)}
+.btn.on.absent{background:var(--red);border-color:var(--red)}
+.btn.on.late,.btn.on.excused{background:var(--amber);border-color:var(--amber)}
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.95rem}
+th,td{padding:.55rem .6rem;border-bottom:1px solid var(--line);text-align:right;vertical-align:middle}
+th{background:var(--green-l);color:var(--green-d);font-weight:700;white-space:nowrap}
+td .btn+.btn{margin-inline-start:.25rem}
+.muted{color:var(--muted)}
+.empty{text-align:center;color:var(--muted);padding:2rem 1rem}
+.tag{display:inline-block;background:var(--green-l);color:var(--green-d);padding:.05rem .55rem;border-radius:99px;font-size:.82rem}
+select,input,textarea{font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;background:#fff;width:100%}
+.bar select,.bar input{width:auto}
+label{display:block;margin-bottom:.7rem;font-size:.92rem;color:var(--muted)}
+label input,label select,label textarea{margin-top:.2rem;color:var(--text)}
+.login{max-width:420px;margin:3vh auto;padding:0 1rem}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:1rem;z-index:20}
+.modal{background:#fff;border-radius:var(--radius);padding:1.1rem;width:100%;max-width:480px;max-height:90vh;overflow:auto}
+.modal.wide{max-width:720px}
+.row{display:flex;gap:.5rem;margin-top:.5rem}
+.toast{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:.6rem 1.1rem;border-radius:99px;z-index:30;max-width:90vw}
+.note{font-size:.85rem;color:var(--muted);background:#fffaf0;border:1px solid #f0e2bd;border-radius:8px;padding:.6rem .8rem;margin-bottom:1rem}
+.news{border-inline-start:4px solid var(--gold);padding:.4rem .8rem;margin-bottom:.6rem;background:#fffdf7}
+.news small{color:var(--muted)}
+@media (max-width:600px){main{padding:.6rem}th,td{padding:.45rem .4rem;font-size:.9rem}}
+@media print{.top,.tabs,.btn,.bar{display:none!important}}
+
+/* ===== الشاشة الافتتاحية ===== */
+#splash{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.8rem;background:radial-gradient(circle at 50% 40%,#fff 0%,#f4f1e6 100%);transition:opacity .6s ease,visibility .6s ease}
+#splash.hide{opacity:0;visibility:hidden}
+#splash img{width:min(60vw,260px);height:auto;animation:pop .9s cubic-bezier(.2,.8,.2,1) both}
+.gbar{width:min(60vw,260px);height:6px;border-radius:99px;background:#eadfbd;overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.08)}
+.gbar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#a8781f,#f0d57a,#b8892b);animation:fill 3s linear forwards}
+@keyframes fill{to{width:100%}}
+@keyframes pop{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
+
+/* ===== شعار الدخول اللامع ===== */
+.logo-wrap{position:relative;width:min(58vw,230px);margin:0 auto 1.2rem;animation:glow 3.2s ease-in-out infinite}
+.logo-wrap img{display:block;width:100%;height:auto}
+.sheen{position:absolute;inset:0;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center;
+  background:linear-gradient(115deg,transparent 38%,rgba(255,244,190,.95) 50%,transparent 62%);background-size:260% 100%;background-position:160% 0;animation:sheen 2.8s ease-in-out infinite}
+@keyframes sheen{0%{background-position:160% 0}70%,100%{background-position:-60% 0}}
+@keyframes glow{50%{filter:drop-shadow(0 0 14px rgba(184,137,43,.55))}}
+
+/* ===== مربعات الدخول ===== */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-bottom:1rem}
+.tile{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.55rem;background:#fff;border:1px solid var(--line);border-radius:14px;color:var(--green-d);font:inherit;font-weight:700;cursor:pointer;transition:transform .15s,background .2s,box-shadow .2s}
+.tile svg{width:42px;height:42px}
+.tile:hover{background:var(--green-l);transform:translateY(-2px)}
+.tile.on{background:var(--green);color:#fff;border-color:var(--green);box-shadow:inset 0 -4px 0 var(--gold)}
+.loginform{animation:rise .35s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.brand{display:flex;align-items:center;gap:.6rem}
+.hlogo{width:42px;height:42px;border-radius:50%;background:#fff;padding:2px}
+@media (prefers-reduced-motion:reduce){.sheen,.logo-wrap{animation:none}}
+
+code.pw{font-family:ui-monospace,Consolas,monospace;letter-spacing:.1em;background:var(--green-l);color:var(--green-d);padding:.1rem .55rem;border-radius:6px;direction:ltr;display:inline-block}
