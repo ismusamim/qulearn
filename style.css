@@ -93,3 +93,8 @@ code.pw{font-family:ui-monospace,Consolas,monospace;letter-spacing:.1em;backgrou
 .opt:last-child{border-bottom:0}
 .opt:hover,.opt:focus{background:var(--green-l);outline:0}
 input.picked{border-color:var(--green);background:var(--green-l)}
+
+/* القائمة تطفو فوق ما تحتها ولا تزيحه */
+.combo{position:relative;margin-bottom:.8rem}
+.combo label{margin-bottom:0}
+.combo .results{position:absolute;inset-inline:0;top:calc(100% + 4px);z-index:20;margin:0}

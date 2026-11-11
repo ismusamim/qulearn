@@ -160,7 +160,7 @@ function loginView() {
   const r = ui.loginRole;
   const roles = [['student', 'طالب'], ['teacher', 'معلم'], ['admin', 'إداري']];
   const pick = list => list.length
-    ? `<label>${r === 'teacher' ? 'المعلم' : 'الطالب'}<input type="text" id="ufilter" placeholder="اكتب بعض حروف الاسم أو اختره من القائمة" autocomplete="off"></label><input type="hidden" name="uid" id="uid" value=""><div class="results" id="uresults" hidden></div>`
+    ? `<div class="combo"><label>${r === 'teacher' ? 'المعلم' : 'الطالب'}<input type="text" id="ufilter" placeholder="اكتب بعض حروف الاسم أو اختره من القائمة" autocomplete="off"></label><input type="hidden" name="uid" id="uid" value=""><div class="results" id="uresults" hidden></div></div>`
     : `<p class="muted">لا يوجد ${r === 'teacher' ? 'معلمون' : 'طلاب'} بعد. ادخل كإداري لإضافتهم.</p>`;
   const who = r === 'teacher' ? pick(db.teachers) : r === 'student' ? pick(db.students) : '';
   const form = r
@@ -425,6 +425,7 @@ const A = {
 document.addEventListener('click', e => {
   const pk = e.target.closest('[data-pick]');
   if (pk) { const u = byId(loginUsers(), pk.dataset.pick); if (u) pickUser(u); return; }
+  if (e.target.id === 'ufilter') showResults();
   if (!e.target.closest('#ufilter, #uresults')) showResults(false);
   const el = e.target.closest('[data-act]');
   if (el && A[el.dataset.act]) A[el.dataset.act](el.dataset);
@@ -473,6 +474,7 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('focusin', e => { if (e.target.id === 'ufilter') showResults(); });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { showResults(false); return; }
   if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
   if (e.target.id === 'ufilter') {
     const m = loginMatches();
