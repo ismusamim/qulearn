@@ -2,6 +2,7 @@
   --green:#0f6b4f; --green-d:#0a4d38; --green-l:#e6f4ee;
   --gold:#b8892b; --bg:#f6f7f5; --card:#fff; --text:#1d2b25; --muted:#6b7a73;
   --line:#e2e8e4; --red:#b3372f; --amber:#b7791f; --radius:12px;
+  color-scheme:light;
 }
 *{box-sizing:border-box}
 html,body{margin:0}
@@ -46,7 +47,8 @@ td .btn+.btn{margin-inline-start:.25rem}
 .muted{color:var(--muted)}
 .empty{text-align:center;color:var(--muted);padding:2rem 1rem}
 .tag{display:inline-block;background:var(--green-l);color:var(--green-d);padding:.05rem .55rem;border-radius:99px;font-size:.82rem}
-select,input,textarea{font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;background:#fff;width:100%}
+select,input,textarea{font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);width:100%}
+option{background:#fff;color:var(--text)}
 .bar select,.bar input{width:auto}
 label{display:block;margin-bottom:.7rem;font-size:.92rem;color:var(--muted)}
 label input,label select,label textarea{margin-top:.2rem;color:var(--text)}
