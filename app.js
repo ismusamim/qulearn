@@ -13,8 +13,14 @@ const SKEY = 'halaqat_session';
 const TABS = {
   admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['teachers', 'المعلمون'], ['halaqat', 'الحلقات'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['settings', 'الإعدادات']],
   teacher: [['att', 'الحضور'], ['mine', 'طلابي'], ['profile', 'ملفي'], ['news', 'الإعلانات']],
+  supervisor: [['att', 'الحضور'], ['mine', 'الطلاب'], ['news', 'الإعلانات']],
   student: [['me', 'تقدمي'], ['hist', 'السجل'], ['news', 'الإعلانات']]
 };
+/* أنواع الحسابات: كل نوع ومجموعته في قاعدة البيانات */
+const ROLES = ['teacher', 'student', 'supervisor', 'admin'];
+const ROLE_L = { student: 'طالب', teacher: 'معلم', supervisor: 'مشرف', admin: 'إداري' };
+const COLL = { student: 'students', teacher: 'teachers', supervisor: 'supervisors', admin: 'admins' };
+const KIND_ONE = { students: 'طالب', teachers: 'معلم', supervisors: 'مشرف', admins: 'إداري' };
 
 /* ============ ملف المعلم الداخلي ============ */
 // كل حقل: [المفتاح, العنوان, النوع, خيارات]
@@ -61,18 +67,31 @@ function toast(msg) {
 
 /* ============ البيانات ============ */
 function seed() {
-  const t1 = uid(), h1 = uid();
+  const t1 = uid(), h1 = uid(), s1 = uid();
   const names = ['عبد الله', 'محمد', 'يوسف'];
   return {
-    settings: { org: 'إدارة الحلقات القرآنية', adminPin: '1234' },
+    settings: { org: 'إدارة الحلقات القرآنية' },
+    admins: [{ id: uid(), name: 'المدير', pin: '1234' }],
+    supervisors: [{ id: s1, name: 'المشرف خالد', phone: '', pin: '0000' }],
     teachers: [{ id: t1, name: 'الشيخ أحمد', phone: '', pin: '0000' }],
-    halaqat: [{ id: h1, name: 'حلقة الفرقان', teacherId: t1, schedule: 'بعد صلاة العصر', place: 'المسجد الكبير' }],
+    halaqat: [{ id: h1, name: 'حلقة الفرقان', teacherId: t1, supervisorId: s1, schedule: 'بعد صلاة العصر', place: 'المسجد الكبير' }],
     students: names.map(n => ({ id: uid(), name: n, halaqaId: h1, phone: '', pin: '0000' })),
     attendance: [], records: [], news: []
   };
 }
+/* ترقية البيانات القديمة: الإداري صار حسابًا باسم، وأُضيف المشرفون */
+function migrate(d) {
+  d.settings = d.settings || { org: 'إدارة الحلقات القرآنية' };
+  if (!Array.isArray(d.admins) || !d.admins.length) d.admins = [{ id: uid(), name: 'المدير', pin: d.settings.adminPin || '1234' }];
+  if (!Array.isArray(d.supervisors)) d.supervisors = [];
+  delete d.settings.adminPin;
+  return d;
+}
 function load() {
-  try { const r = localStorage.getItem(KEY); if (r) return JSON.parse(r); } catch (e) { /* ignore */ }
+  try {
+    const r = localStorage.getItem(KEY);
+    if (r) { const d = migrate(JSON.parse(r)); try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) { /* ignore */ } return d; }
+  } catch (e) { /* ignore */ }
   const d = seed();
   try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) { /* ignore */ }
   return d;
@@ -82,13 +101,18 @@ const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catc
 
 let session = null;
 try { session = JSON.parse(ss.get(SKEY) || 'null'); } catch (e) { /* ignore */ }
-const ui = { loginRole: null, tab: null, hid: '', date: today(), fh: '', psub: 'personal', msub: 'teachers', shown: {} };
+const ui = { pick: null, tab: null, hid: '', date: today(), fh: '', psub: 'personal', msub: 'teachers', shown: {} };
 
 /* ============ دوال مساعدة للمجال ============ */
 const hName = id => byId(db.halaqat, id)?.name || '—';
 const tName = id => byId(db.teachers, id)?.name || '—';
 const sName = id => byId(db.students, id)?.name || '—';
-const myHalaqat = () => db.halaqat.filter(h => h.teacherId === session.id);
+const supName = id => byId(db.supervisors, id)?.name || '—';
+const myHalaqat = () => db.halaqat.filter(h => (session.role === 'supervisor' ? h.supervisorId : h.teacherId) === session.id);
+const accounts = () => ROLES.flatMap(r => db[COLL[r]].map(u => ({ role: r, u })));
+const me = () => session && byId(db[COLL[session.role]] || [], session.id);
+/* حسابات أخرى بنفس اسم المستخدم الحالي (لتبديل الوضع) */
+const sameName = () => { const m = me(); return m ? accounts().filter(a => norm(a.u.name) === norm(m.name) && !(a.role === session.role && a.u.id === m.id)) : []; };
 const recsOf = sid => db.records.filter(r => r.studentId === sid).slice().reverse().sort((a, b) => b.date.localeCompare(a.date));
 const recLine = r => `${r.type} — سورة ${SURAHS[r.surah - 1][0]} (${r.from}–${r.to})`;
 function lastHifz(sid) {
@@ -103,6 +127,7 @@ function attRate(sid) {
 }
 const hifzAyat = sid => db.records.filter(r => r.studentId === sid && r.type === 'حفظ').reduce((s, r) => s + (r.to - r.from + 1), 0);
 const newsFor = aud => db.news.filter(n => n.audience === 'all' || n.audience === aud).slice().reverse();
+const AUD = { all: 'الجميع', teacher: 'المعلمون', supervisor: 'المشرفون', student: 'الطلاب' };
 const opts = (arr, v = 'id', l = 'name') => arr.map(x => ({ v: x[v], l: x[l] }));
 
 /* ============ النماذج (نوافذ) ============ */
@@ -154,31 +179,36 @@ function openInfo(title, html) {
 const ICONS = {
   student: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11.5V16c0 1.5 3 3 6 3s6-1.5 6-3v-4.5"/><path d="M22 9v6"/></svg>',
   teacher: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="7.5" r="3"/><path d="M2.5 20v-1.2a6 6 0 0 1 12 0V20"/><rect x="13.5" y="4" width="8" height="6" rx="1"/><path d="M17.5 10v3m-2 0h4"/></svg>',
+  supervisor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 12l2 2 4-4"/><path d="M9 17h6"/></svg>',
   admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
 };
 function loginView() {
-  const r = ui.loginRole;
-  const roles = [['student', 'طالب'], ['teacher', 'معلم'], ['admin', 'إداري']];
-  const pick = list => list.length
-    ? `<div class="combo"><label>${r === 'teacher' ? 'المعلم' : 'الطالب'}<input type="text" id="ufilter" placeholder="اكتب بعض حروف الاسم أو اختره من القائمة" autocomplete="off"></label><input type="hidden" name="uid" id="uid" value=""><div class="results" id="uresults" hidden></div></div>`
-    : `<p class="muted">لا يوجد ${r === 'teacher' ? 'معلمون' : 'طلاب'} بعد. ادخل كإداري لإضافتهم.</p>`;
-  const confirmBox = '<div class="confirm" id="uconfirm" hidden><div class="info"><small>الحلقة</small><b id="uhal">—</b></div><div class="info"><small>المكان</small><b id="uplace">—</b></div></div>';
-  const who = r === 'teacher' ? pick(db.teachers) : r === 'student' ? pick(db.students) + (db.students.length ? confirmBox : '') : '';
-  const form = r
-    ? `<div class="card loginform"><div id="login">${who}<label>كلمة المرور<input name="pin" type="password" inputmode="numeric" autocomplete="off"></label><button type="button" class="btn primary" style="width:100%" data-act="doLogin">دخول</button></div></div>`
-    : '<p class="muted" style="text-align:center">اختر نوع الدخول للمتابعة</p>';
+  const none = !accounts().length;
   return `<div class="login"><div class="logo-wrap"><img src="${LOGO}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${LOGO});mask-image:url(${LOGO})"></div></div>
-  <div class="tiles">${roles.map(([k, l]) => `<button type="button" class="tile ${k === r ? 'on' : ''}" data-act="role" data-v="${k}">${ICONS[k]}<span>${l}</span></button>`).join('')}</div>
-  ${form}<p class="muted" style="font-size:.8rem;text-align:center">النسخة التجريبية: إداري 1234 — معلم وطالب 0000 (غيّرها من لوحة الإدارة).</p></div>`;
+  <div class="card loginform"><div id="login">
+    <div class="combo"><label>الاسم<input type="text" id="ufilter" placeholder="اكتب بعض حروف اسمك أو اختره من القائمة" autocomplete="off"></label><div class="results" id="uresults" hidden></div></div>
+    <div class="modes" id="umodes" hidden></div>
+    <div class="confirm" id="uinfo" hidden></div>
+    <label>كلمة المرور<input name="pin" type="password" inputmode="numeric" autocomplete="off"></label>
+    <button type="button" class="btn primary" style="width:100%" data-act="doLogin">دخول</button>
+    ${none ? '<p class="muted" style="margin-bottom:0">لا توجد حسابات بعد.</p>' : ''}
+  </div></div>
+  <p class="muted" style="font-size:.8rem;text-align:center">النسخة التجريبية: «المدير» 1234 — «الشيخ أحمد» و«المشرف خالد» والطلاب 0000 (غيّرها من لوحة الإدارة).</p></div>`;
 }
 
-/* ===== بحث الاسم في صفحة الدخول ===== */
-const norm = t => String(t || '').replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').toLowerCase().trim();
-const loginUsers = () => ui.loginRole === 'teacher' ? db.teachers : ui.loginRole === 'student' ? db.students : [];
+/* ===== بحث الاسم في صفحة الدخول (كل الحسابات في قائمة واحدة) ===== */
+const norm = t => String(t || '').replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ').toLowerCase().trim();
+/* تُجمع الحسابات بالاسم: الاسم الواحد قد يكون له أكثر من وضع (معلم وطالب مثلًا) */
+function nameGroups() {
+  const m = new Map();
+  accounts().forEach(a => { const k = norm(a.u.name); if (!m.has(k)) m.set(k, { key: k, name: a.u.name, accts: [] }); m.get(k).accts.push(a); });
+  m.forEach(g => g.accts.sort((x, y) => ROLES.indexOf(x.role) - ROLES.indexOf(y.role)));
+  return [...m.values()];
+}
 function loginMatches() {
   const q = norm(document.getElementById('ufilter')?.value);
-  return loginUsers().filter(u => !q || norm(u.name).includes(q));
+  return nameGroups().filter(g => !q || g.key.includes(q));
 }
 function showResults(open = true) {
   const box = document.getElementById('uresults');
@@ -186,36 +216,54 @@ function showResults(open = true) {
   if (!open) { box.hidden = true; return; }
   const list = loginMatches();
   box.innerHTML = list.length
-    ? list.map(u => `<button type="button" class="opt" data-pick="${esc(u.id)}">${esc(u.name)}</button>`).join('')
+    ? list.map(g => `<button type="button" class="opt" data-pick="${esc(g.key)}">${esc(g.name)}</button>`).join('')
     : '<div class="muted" style="padding:.6rem .8rem">لا توجد نتائج مطابقة</div>';
   box.hidden = false;
 }
-function pickUser(u) {
-  const f = document.getElementById('ufilter');
-  f.value = u.name; f.classList.add('picked');
-  document.getElementById('uid').value = u.id;
-  showResults(false);
-  const box = document.getElementById('uconfirm');
-  if (box) {
-    const h = byId(db.halaqat, u.halaqaId);
-    document.getElementById('uhal').textContent = h?.name || 'غير محدد';
-    document.getElementById('uplace').textContent = h?.place || 'غير محدد';
-    box.hidden = false;
+/* المربعات الخاصة بكل وضع (للقراءة فقط، للتأكد من الهوية) */
+function acctInfo(a) {
+  const box = (l, v) => `<div class="info"><small>${l}</small><b>${esc(v)}</b></div>`;
+  if (a.role === 'student') { const h = byId(db.halaqat, a.u.halaqaId); return box('الحلقة', h?.name || 'غير محدد') + box('المكان', h?.place || 'غير محدد'); }
+  if (a.role === 'teacher' || a.role === 'supervisor') {
+    const hs = db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id);
+    return box(a.role === 'teacher' ? 'حلقاته' : 'الحلقات المسندة', hs.map(h => h.name).join('، ') || 'لا توجد بعد') + box('عدد الطلاب', db.students.filter(s => hs.some(h => h.id === s.halaqaId)).length);
   }
+  return box('الصلاحيات', 'إدارة كاملة') + box('المؤسسة', db.settings.org);
+}
+function modeLabel(a, list) {
+  if (list.filter(x => x.role === a.role).length < 2) return ROLE_L[a.role];
+  const extra = a.role === 'student' ? hName(a.u.halaqaId) : a.role === 'admin' ? '' : db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id).map(h => h.name).join('، ');
+  return ROLE_L[a.role] + (extra && extra !== '—' ? ' – ' + extra : '');
+}
+function renderPick() {
+  const p = ui.pick, modes = document.getElementById('umodes'), info = document.getElementById('uinfo');
+  if (!modes || !info) return;
+  if (!p) { modes.hidden = info.hidden = true; return; }
+  const cur = p.accts[p.sel];
+  modes.innerHTML = p.accts.map((a, i) => `<button type="button" class="mode ${i === p.sel ? 'on' : ''}" ${p.accts.length > 1 ? `data-act="lmode" data-i="${i}"` : 'tabindex="-1"'} aria-pressed="${i === p.sel}">${ICONS[a.role]}<span>${esc(modeLabel(a, p.accts))}</span></button>`).join('');
+  info.innerHTML = acctInfo(cur);
+  modes.hidden = info.hidden = false;
+}
+function pickUser(g) {
+  const f = document.getElementById('ufilter');
+  f.value = g.name; f.classList.add('picked');
+  ui.pick = { accts: g.accts, sel: 0 };
+  showResults(false);
+  renderPick();
   document.querySelector('#login input[name=pin]')?.focus();
 }
 
 /* ============ الهيكل العام ============ */
 function render() {
   if (session) {
-    const ok = session.role === 'admin' || (session.role === 'teacher' && byId(db.teachers, session.id)) || (session.role === 'student' && byId(db.students, session.id));
-    if (!ok) { session = null; ss.del(SKEY); }
+    if (!me()) { session = null; ss.del(SKEY); }
   }
   if (!session) { $app.innerHTML = loginView(); return; }
   const role = session.role, tabs = TABS[role];
   if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
-  const who = role === 'admin' ? 'لوحة الإدارة' : role === 'teacher' ? 'المعلم: ' + tName(session.id) : 'الطالب: ' + sName(session.id);
-  $app.innerHTML = `<header class="top"><div class="brand"><img class="hlogo" src="${LOGO}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div><div class="hactions"><button class="btn" data-act="logout">خروج</button>${role === 'admin' ? `<button type="button" class="iconbtn ${ui.tab === 'settings' ? 'on' : ''}" data-act="panel" title="لوحة التحكم" aria-label="لوحة التحكم">${ICONS.gear}</button>` : ''}</div></header>
+  const who = ROLE_L[role] + ': ' + me().name;
+  const sw = sameName().length ? '<button class="btn" data-act="switchMode">تبديل الوضع</button>' : '';
+  $app.innerHTML = `<header class="top"><div class="brand"><img class="hlogo" src="${LOGO}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div><div class="hactions">${sw}<button class="btn" data-act="logout">خروج</button>${role === 'admin' ? `<button type="button" class="iconbtn ${ui.tab === 'settings' ? 'on' : ''}" data-act="panel" title="لوحة التحكم" aria-label="لوحة التحكم">${ICONS.gear}</button>` : ''}</div></header>
   <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}">${l}</button>`).join('')}</nav>
   <main>${VIEWS[role][ui.tab]()}</main>`;
 }
@@ -241,18 +289,20 @@ const adminViews = {
     const t = today(), att = db.attendance.filter(a => a.date === t);
     const ok = att.filter(a => a.status === 'present' || a.status === 'late').length;
     const week = new Date(Date.now() - 7 * 864e5), wk = `${week.getFullYear()}-${pad(week.getMonth() + 1)}-${pad(week.getDate())}`;
-    const stats = [[db.teachers.length, 'معلم'], [db.halaqat.length, 'حلقة'], [db.students.length, 'طالب'], [att.length ? Math.round(ok * 100 / att.length) + '%' : '—', 'حضور اليوم'], [db.records.filter(r => r.date >= wk).length, 'تسجيلات الأسبوع']];
+    const stats = [[db.teachers.length, 'معلم'], [db.supervisors.length, 'مشرف'], [db.halaqat.length, 'حلقة'], [db.students.length, 'طالب'], [att.length ? Math.round(ok * 100 / att.length) + '%' : '—', 'حضور اليوم'], [db.records.filter(r => r.date >= wk).length, 'تسجيلات الأسبوع']];
     return `<div class="grid">${stats.map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>${newsView('admin')}`;
   },
   members() {
-    const kind = ui.msub === 'students' ? 'students' : 'teachers';
-    const one = kind === 'students' ? 'طالب' : 'معلم';
-    const subs = [['teachers', 'المعلمون'], ['students', 'الطلاب']];
-    const rows = db[kind].map((m, i) => `<tr><td>${i + 1}</td><td>${esc(m.name)}</td>
+    const subs = [['teachers', 'المعلمون'], ['students', 'الطلاب'], ['supervisors', 'المشرفون'], ['admins', 'الإداريون']];
+    const kind = subs.some(x => x[0] === ui.msub) ? ui.msub : 'teachers';
+    const one = KIND_ONE[kind];
+    const others = m => accounts().filter(a => norm(a.u.name) === norm(m.name) && a.u.id !== m.id).map(a => ROLE_L[a.role]);
+    const rows = db[kind].map((m, i) => { const o = others(m); return `<tr><td>${i + 1}</td><td>${esc(m.name)}${o.length ? ` <span class="tag" title="نفس الاسم له حساب آخر">+ ${esc(o.join('، '))}</span>` : ''}</td>
       <td><code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button></td>
-      <td><button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button><button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="${kind === 'students' ? 'delStudent' : 'delTeacher'}" data-id="${m.id}">حذف</button></td></tr>`).join('');
-    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span><button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button><button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
-    <div class="note">عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل بها من صفحة الدخول.</div>
+      <td><button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button><button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="delMember" data-id="${m.id}" data-k="${kind}">حذف</button></td></tr>`; }).join('');
+    const tip = kind === 'supervisors' ? 'حدّد حلقات كل مشرف من تبويب «الحلقات» ← تعديل ← المشرف.' : 'عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل باسمه وكلمة مروره من صفحة الدخول.';
+    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
+    <div class="note">${tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
     ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>كلمة المرور</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
   teachers() {
@@ -261,7 +311,7 @@ const adminViews = {
   },
   halaqat() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الحلقات</h2><button class="btn primary" data-act="addHalaqa">+ حلقة</button></div>
-    ${db.halaqat.length ? `<div class="tbl"><table><tr><th>الحلقة</th><th>المعلم</th><th>الموعد</th><th>المكان</th><th>الطلاب</th><th></th></tr>${db.halaqat.map(h => `<tr><td>${esc(h.name)}</td><td>${esc(tName(h.teacherId))}</td><td>${esc(h.schedule)}</td><td>${esc(h.place)}</td><td>${db.students.filter(s => s.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا توجد حلقات.')}</div>`;
+    ${db.halaqat.length ? `<div class="tbl"><table><tr><th>الحلقة</th><th>المعلم</th><th>المشرف</th><th>الموعد</th><th>المكان</th><th>الطلاب</th><th></th></tr>${db.halaqat.map(h => `<tr><td>${esc(h.name)}</td><td>${esc(tName(h.teacherId))}</td><td>${esc(supName(h.supervisorId))}</td><td>${esc(h.schedule)}</td><td>${esc(h.place)}</td><td>${db.students.filter(s => s.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا توجد حلقات.')}</div>`;
   },
   students() {
     const list = db.students.filter(s => !ui.fh || s.halaqaId === ui.fh);
@@ -272,12 +322,12 @@ const adminViews = {
   },
   news() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الإعلانات</h2><button class="btn primary" data-act="addNews">+ إعلان</button></div>
-    ${db.news.length ? db.news.slice().reverse().map(n => `<div class="news">${esc(n.text)}<br><small>${esc(n.date)} — ${n.audience === 'all' ? 'الجميع' : n.audience === 'teacher' ? 'المعلمون' : 'الطلاب'}</small> <button class="btn sm danger" data-act="delNews" data-id="${n.id}">حذف</button></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
+    ${db.news.length ? db.news.slice().reverse().map(n => `<div class="news">${esc(n.text)}<br><small>${esc(n.date)} — ${AUD[n.audience] || '—'}</small> <button class="btn sm danger" data-act="delNews" data-id="${n.id}">حذف</button></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
   },
   settings() {
     return `<div class="card"><h2>الإعدادات</h2>
     <div class="note">البيانات تُحفظ في متصفح هذا الجهاز فقط (localStorage). خذ نسخة احتياطية بانتظام، ولا تعتمد على الرموز السرية لحماية بيانات حساسة.</div>
-    <div class="bar"><button class="btn" data-act="editSettings">اسم المؤسسة والرمز السري</button>
+    <div class="bar"><button class="btn" data-act="editSettings">اسم المؤسسة</button>
     <button class="btn" data-act="export">تصدير نسخة احتياطية</button>
     <label class="btn" style="margin:0">استيراد نسخة<input type="file" accept="application/json" data-change="import" hidden></label>
     <button class="btn danger" data-act="reset">مسح كل البيانات</button></div></div>`;
@@ -330,7 +380,8 @@ const studentViews = {
   hist: () => `<div class="card"><h2>سجل التسميع</h2>${historyTable(session.id)}</div>`,
   news: () => newsView('student')
 };
-const VIEWS = { admin: adminViews, teacher: teacherViews, student: studentViews };
+const supervisorViews = { att: teacherViews.att, mine: teacherViews.mine, news: () => newsView('supervisor') };
+const VIEWS = { admin: adminViews, teacher: teacherViews, supervisor: supervisorViews, student: studentViews };
 
 /* ============ الاستيراد من Excel / CSV / Google Sheets ============ */
 const HDR = {
@@ -346,7 +397,7 @@ function decodeText(buf) {
   catch (e) { return new TextDecoder('windows-1256').decode(buf); }
 }
 function parseCSV(text) {
-  text = String(text).replace(/^﻿/, '');
+  text = String(text).replace(/^\uFEFF/, '');
   const first = text.split(/\r?\n/)[0] || '';
   const delim = ['\t', ';', ','].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
   const rows = []; let row = [], cur = '', q = false;
@@ -509,7 +560,7 @@ function openImport(kind) {
   };
   $('#imu').addEventListener('keydown', e => { if (e.key === 'Enter') $('#imgo').click(); });
   $('#imt').onclick = () => {
-    const csv = '﻿' + (isS ? 'الاسم,الحلقة,الجوال,كلمة المرور\nمحمد أحمد,حلقة الفرقان,,\n' : 'الاسم,الجوال,كلمة المرور\nأحمد علي,,\n');
+    const csv = '\uFEFF' + (isS ? 'الاسم,الحلقة,الجوال,كلمة المرور\nمحمد أحمد,حلقة الفرقان,,\n' : 'الاسم,الجوال,كلمة المرور\nأحمد علي,,\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     a.download = isS ? 'قالب-الطلاب.csv' : 'قالب-المعلمين.csv'; a.click(); URL.revokeObjectURL(a.href);
@@ -536,8 +587,21 @@ function openImport(kind) {
 
 /* ============ الإجراءات ============ */
 const A = {
-  role: d => { ui.loginRole = d.v; render(); document.querySelector('#ufilter, #login input[name=pin]')?.focus(); },
-  logout: () => { ui.shown = {}; session = null; ss.del(SKEY); ui.tab = null; render(); },
+  lmode: d => { if (!ui.pick) return; ui.pick.sel = +d.i; renderPick(); document.querySelector('#login input[name=pin]')?.focus(); },
+  switchMode: () => {
+    const list = sameName();
+    if (!list.length) return;
+    openInfo('تبديل الوضع', `<p class="muted">اختر الوضع الذي تريد الانتقال إليه:</p><div class="modes">${list.map(a => `<button type="button" class="mode" data-act="toMode" data-r="${a.role}" data-id="${esc(a.u.id)}">${ICONS[a.role]}<span>${esc(modeLabel(a, list))}</span></button>`).join('')}</div>`);
+  },
+  toMode: d => {
+    document.querySelectorAll('.overlay').forEach(o => o.remove());
+    const acc = byId(db[COLL[d.r]] || [], d.id), cur = me();
+    if (!acc || !cur) return;
+    const go = () => { session = { role: d.r, id: acc.id }; ss.set(SKEY, JSON.stringify(session)); ui.tab = null; ui.hid = ''; ui.shown = {}; render(); toast('أنت الآن في وضع ' + ROLE_L[d.r]); };
+    if (acc.pin === cur.pin) { go(); return; }
+    openForm('كلمة مرور حساب ' + ROLE_L[d.r], [{ name: 'pin', label: 'كلمة المرور', type: 'password', required: true }], v => { if (v.pin !== acc.pin) return 'كلمة المرور غير صحيحة'; go(); });
+  },
+  logout: () => { ui.shown = {}; ui.pick = null; session = null; ss.del(SKEY); ui.tab = null; render(); },
   tab: d => { ui.tab = d.v; render(); },
   panel: () => { if (session?.role !== 'admin') return; ui.tab = 'settings'; render(); window.scrollTo(0, 0); },
   hist: d => openInfo('سجل: ' + sName(d.id), historyTable(d.id)),
@@ -570,10 +634,12 @@ const A = {
     openForm('تعديل الاسم', [{ name: 'name', label: 'الاسم', value: m.name, required: true }], v => { m.name = v.name.trim(); });
   },
   addMember: d => {
-    const k = d.k, one = k === 'students' ? 'طالب' : 'معلم';
+    const k = d.k, one = KIND_ONE[k];
     openForm('إضافة ' + one, [{ name: 'name', label: 'الاسم', required: true }, { type: 'note', label: 'ستُنشأ كلمة المرور تلقائيًا.' }], v => {
       const id = uid(), pin = genPass();
-      db[k].push(k === 'students' ? { id, name: v.name.trim(), halaqaId: '', phone: '', pin } : { id, name: v.name.trim(), phone: '', pin });
+      const name = v.name.trim();
+      if (db[k].some(m => norm(m.name) === norm(name))) return `يوجد ${one} بالاسم نفسه`;
+      db[k].push(k === 'students' ? { id, name, halaqaId: '', phone: '', pin } : k === 'admins' ? { id, name, pin } : { id, name, phone: '', pin });
       ui.shown[id] = true;
       toast('تم إنشاء الحساب — كلمة المرور: ' + pin);
     });
@@ -585,30 +651,41 @@ const A = {
     v => { Object.assign(t, { name: v.name.trim(), phone: v.phone, pin: v.pin }); }); },
   delTeacher: d => ask('حذف المعلم؟ ستبقى حلقاته بدون معلم.', () => { db.teachers = db.teachers.filter(t => t.id !== d.id); db.halaqat.forEach(h => { if (h.teacherId === d.id) h.teacherId = ''; }); save(); render(); }),
 
-  addHalaqa: () => openForm('حلقة جديدة', [{ name: 'name', label: 'اسم الحلقة', required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'schedule', label: 'الموعد' }, { name: 'place', label: 'المكان' }],
-    v => { db.halaqat.push({ id: uid(), name: v.name.trim(), teacherId: v.teacherId, schedule: v.schedule, place: v.place.trim() }); }),
-  editHalaqa: d => { const h = byId(db.halaqat, d.id); openForm('تعديل حلقة', [{ name: 'name', label: 'اسم الحلقة', value: h.name, required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', value: h.teacherId, options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'schedule', label: 'الموعد', value: h.schedule }, { name: 'place', label: 'المكان', value: h.place || '' }],
-    v => { Object.assign(h, { name: v.name.trim(), teacherId: v.teacherId, schedule: v.schedule, place: v.place.trim() }); }); },
+  addHalaqa: () => openForm('حلقة جديدة', [{ name: 'name', label: 'اسم الحلقة', required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'supervisorId', label: 'المشرف', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.supervisors)] }, { name: 'schedule', label: 'الموعد' }, { name: 'place', label: 'المكان' }],
+    v => { db.halaqat.push({ id: uid(), name: v.name.trim(), teacherId: v.teacherId, supervisorId: v.supervisorId, schedule: v.schedule, place: v.place.trim() }); }),
+  editHalaqa: d => { const h = byId(db.halaqat, d.id); openForm('تعديل حلقة', [{ name: 'name', label: 'اسم الحلقة', value: h.name, required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', value: h.teacherId, options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'supervisorId', label: 'المشرف', type: 'select', value: h.supervisorId || '', options: [{ v: '', l: '— بدون —' }, ...opts(db.supervisors)] }, { name: 'schedule', label: 'الموعد', value: h.schedule }, { name: 'place', label: 'المكان', value: h.place || '' }],
+    v => { Object.assign(h, { name: v.name.trim(), teacherId: v.teacherId, supervisorId: v.supervisorId, schedule: v.schedule, place: v.place.trim() }); }); },
   delHalaqa: d => ask('حذف الحلقة؟ سيبقى طلابها بدون حلقة.', () => { db.halaqat = db.halaqat.filter(h => h.id !== d.id); db.students.forEach(s => { if (s.halaqaId === d.id) s.halaqaId = ''; }); save(); render(); }),
 
   addStudent: () => openForm('طالب جديد', [{ name: 'name', label: 'الاسم', required: true }, { name: 'halaqaId', label: 'الحلقة', type: 'select', value: ui.fh, options: [{ v: '', l: '— بدون —' }, ...opts(db.halaqat)] }, { name: 'phone', label: 'جوال ولي الأمر', type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: genPass(), required: true }],
     v => { db.students.push({ id: uid(), name: v.name.trim(), halaqaId: v.halaqaId, phone: v.phone, pin: v.pin }); }),
   editStudent: d => { const s = byId(db.students, d.id); openForm('تعديل طالب', [{ name: 'name', label: 'الاسم', value: s.name, required: true }, { name: 'halaqaId', label: 'الحلقة', type: 'select', value: s.halaqaId, options: [{ v: '', l: '— بدون —' }, ...opts(db.halaqat)] }, { name: 'phone', label: 'جوال ولي الأمر', value: s.phone, type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: s.pin, required: true }],
     v => { Object.assign(s, { name: v.name.trim(), halaqaId: v.halaqaId, phone: v.phone, pin: v.pin }); }); },
+  delMember: d => {
+    if (d.k === 'teachers') return A.delTeacher(d);
+    if (d.k === 'students') return A.delStudent(d);
+    if (d.k === 'admins') {
+      if (db.admins.length < 2) { toast('لا يمكن حذف آخر إداري'); return; }
+      if (session.role === 'admin' && session.id === d.id) { toast('لا يمكنك حذف حسابك الحالي'); return; }
+      ask('حذف الإداري؟', () => { db.admins = db.admins.filter(a => a.id !== d.id); save(); render(); });
+      return;
+    }
+    ask('حذف المشرف؟ ستبقى حلقاته بدون مشرف.', () => { db.supervisors = db.supervisors.filter(x => x.id !== d.id); db.halaqat.forEach(h => { if (h.supervisorId === d.id) h.supervisorId = ''; }); save(); render(); });
+  },
   delStudent: d => ask('حذف الطالب وكل سجلاته؟', () => { db.students = db.students.filter(s => s.id !== d.id); db.records = db.records.filter(r => r.studentId !== d.id); db.attendance = db.attendance.filter(a => a.studentId !== d.id); save(); render(); }),
 
-  addNews: () => openForm('إعلان جديد', [{ name: 'text', label: 'النص', type: 'textarea' }, { name: 'audience', label: 'الجمهور', type: 'select', options: [{ v: 'all', l: 'الجميع' }, { v: 'teacher', l: 'المعلمون' }, { v: 'student', l: 'الطلاب' }] }],
+  addNews: () => openForm('إعلان جديد', [{ name: 'text', label: 'النص', type: 'textarea' }, { name: 'audience', label: 'الجمهور', type: 'select', options: [{ v: 'all', l: 'الجميع' }, { v: 'teacher', l: 'المعلمون' }, { v: 'supervisor', l: 'المشرفون' }, { v: 'student', l: 'الطلاب' }] }],
     v => { if (!v.text.trim()) return 'اكتب نص الإعلان'; db.news.push({ id: uid(), text: v.text.trim(), audience: v.audience, date: today() }); }),
   delNews: d => { db.news = db.news.filter(n => n.id !== d.id); save(); render(); },
 
-  editSettings: () => openForm('الإعدادات', [{ name: 'org', label: 'اسم المؤسسة', value: db.settings.org, required: true }, { name: 'adminPin', label: 'الرمز السري للإدارة', value: db.settings.adminPin, required: true }],
-    v => { db.settings.org = v.org.trim(); db.settings.adminPin = v.adminPin; }),
+  editSettings: () => openForm('الإعدادات', [{ name: 'org', label: 'اسم المؤسسة', value: db.settings.org, required: true }, { type: 'note', label: 'كلمات مرور الإداريين تُدار من تبويب «الأعضاء» ← الإداريون.' }],
+    v => { db.settings.org = v.org.trim(); }),
   export: () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
     a.download = `halaqat-backup-${today()}.json`; a.click(); URL.revokeObjectURL(a.href);
   },
-  reset: () => ask('سيتم مسح كل البيانات نهائيًا. متابعة؟', () => { db = seed(); save(); render(); toast('تمت إعادة التهيئة'); }),
+  reset: () => ask('سيتم مسح كل البيانات نهائيًا. متابعة؟', () => { db = seed(); session = null; ss.del(SKEY); save(); render(); toast('تمت إعادة التهيئة'); }),
 
   att: d => {
     const ex = db.attendance.find(a => a.studentId === d.sid && a.date === ui.date);
@@ -637,7 +714,7 @@ const A = {
 
 document.addEventListener('click', e => {
   const pk = e.target.closest('[data-pick]');
-  if (pk) { const u = byId(loginUsers(), pk.dataset.pick); if (u) pickUser(u); return; }
+  if (pk) { const g = nameGroups().find(x => x.key === pk.dataset.pick); if (g) pickUser(g); return; }
   if (e.target.id === 'ufilter') showResults();
   if (!e.target.closest('#ufilter, #uresults')) showResults(false);
   const el = e.target.closest('[data-act]');
@@ -656,34 +733,31 @@ document.addEventListener('change', e => {
       try {
         const d = JSON.parse(rd.result);
         if (!['teachers', 'halaqat', 'students', 'attendance', 'records', 'news'].every(k => Array.isArray(d[k])) || !d.settings) throw new Error('bad');
-        ask('سيتم استبدال البيانات الحالية. متابعة؟', () => { db = d; save(); render(); toast('تم الاستيراد'); });
+        ask('سيتم استبدال البيانات الحالية. متابعة؟', () => { db = migrate(d); session = null; ss.del(SKEY); save(); render(); toast('تم الاستيراد'); });
       } catch (err) { toast('ملف غير صالح'); }
     };
     rd.readAsText(f);
   }
 });
 A.doLogin = () => {
-  const v = {};
-  document.querySelectorAll('#login [name]').forEach(x => { v[x.name] = x.value; });
-  const r = ui.loginRole;
-  if (!r) return;
-  if ((r === 'teacher' || r === 'student') && !v.uid) {
+  if (!ui.pick) {
     const m = loginMatches();
-    if (m.length === 1) v.uid = m[0].id; else { toast('اختر اسمك من القائمة'); return; }
+    if (m.length === 1 && document.getElementById('ufilter').value.trim()) pickUser(m[0]); else { toast('اختر اسمك من القائمة'); return; }
   }
-  let ok = false;
-  if (r === 'admin') ok = v.pin === db.settings.adminPin;
-  else { const u = byId(r === 'teacher' ? db.teachers : db.students, v.uid); ok = !!u && u.pin === v.pin; }
-  if (!ok) { toast('بيانات الدخول غير صحيحة'); return; }
-  session = { role: r, id: r === 'admin' ? 'admin' : v.uid };
+  const pin = document.querySelector('#login input[name=pin]').value;
+  const p = ui.pick, cur = p.accts[p.sel];
+  /* الوضع المختار أولًا، وإن لم تطابق كلمته جُرّبت بقية حسابات الاسم نفسه */
+  const acc = cur.u.pin === pin ? cur : p.accts.find(a => a.u.pin === pin);
+  if (!pin || !acc) { toast('كلمة المرور غير صحيحة'); return; }
+  session = { role: acc.role, id: acc.u.id };
   ss.set(SKEY, JSON.stringify(session));
-  ui.tab = null; ui.hid = ''; render();
+  ui.pick = null; ui.tab = null; ui.hid = ''; render();
 };
 document.addEventListener('input', e => {
   if (e.target.id !== 'ufilter') return;
-  document.getElementById('uid').value = '';
+  ui.pick = null;
   e.target.classList.remove('picked');
-  const cb = document.getElementById('uconfirm'); if (cb) cb.hidden = true;
+  renderPick();
   showResults();
 });
 document.addEventListener('focusin', e => { if (e.target.id === 'ufilter') showResults(); });
@@ -692,7 +766,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
   if (e.target.id === 'ufilter') {
     const m = loginMatches();
-    if (document.getElementById('uid').value) document.querySelector('#login input[name=pin]')?.focus();
+    if (ui.pick) document.querySelector('#login input[name=pin]')?.focus();
     else if (m.length === 1) pickUser(m[0]);
   }
   else if (e.target.closest('#login')) A.doLogin();
