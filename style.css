@@ -13,6 +13,12 @@ main{max-width:1000px;margin:0 auto;padding:1rem}
 .top h1{font-size:1.1rem}
 .top small{opacity:.85}
 .top .btn{background:transparent;color:#fff;border-color:rgba(255,255,255,.5)}
+.hactions{display:flex;align-items:center;gap:.5rem}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.5);background:transparent;color:#fff;cursor:pointer;transition:background .2s,transform .3s}
+.iconbtn svg{width:22px;height:22px}
+.iconbtn:hover{background:rgba(255,255,255,.15);transform:rotate(45deg)}
+.iconbtn.on{background:var(--gold);border-color:var(--gold)}
+.iconbtn:focus-visible{outline:2px solid #fff;outline-offset:2px}
 .tabs{display:flex;gap:.25rem;overflow-x:auto;background:var(--green-d);padding:0 .5rem;position:sticky;top:0;z-index:5}
 .tabs button{background:none;border:0;color:#cfe8dd;padding:.7rem 1rem;font:inherit;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent}
 .tabs button.on{color:#fff;border-color:var(--gold);font-weight:700}
@@ -54,7 +60,7 @@ label input,label select,label textarea{margin-top:.2rem;color:var(--text)}
 .news{border-inline-start:4px solid var(--gold);padding:.4rem .8rem;margin-bottom:.6rem;background:#fffdf7}
 .news small{color:var(--muted)}
 @media (max-width:600px){main{padding:.6rem}th,td{padding:.45rem .4rem;font-size:.9rem}}
-@media print{.top,.tabs,.btn,.bar{display:none!important}}
+@media print{.top,.tabs,.btn,.iconbtn,.bar{display:none!important}}
 
 /* ===== الشاشة الافتتاحية ===== */
 #splash{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.8rem;background:radial-gradient(circle at 50% 40%,#fff 0%,#f4f1e6 100%);transition:opacity .6s ease,visibility .6s ease}
