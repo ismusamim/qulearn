@@ -160,7 +160,7 @@ function loginView() {
   const r = ui.loginRole;
   const roles = [['student', 'طالب'], ['teacher', 'معلم'], ['admin', 'إداري']];
   const pick = list => list.length
-    ? `<label>${r === 'teacher' ? 'المعلم' : 'الطالب'}<select name="uid">${list.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select></label>`
+    ? `<label>${r === 'teacher' ? 'المعلم' : 'الطالب'}<input type="text" id="ufilter" placeholder="اكتب بعض حروف الاسم أو اختره من القائمة" autocomplete="off"></label><input type="hidden" name="uid" id="uid" value=""><div class="results" id="uresults" hidden></div>`
     : `<p class="muted">لا يوجد ${r === 'teacher' ? 'معلمون' : 'طلاب'} بعد. ادخل كإداري لإضافتهم.</p>`;
   const who = r === 'teacher' ? pick(db.teachers) : r === 'student' ? pick(db.students) : '';
   const form = r
@@ -169,6 +169,31 @@ function loginView() {
   return `<div class="login"><div class="logo-wrap"><img src="${LOGO}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${LOGO});mask-image:url(${LOGO})"></div></div>
   <div class="tiles">${roles.map(([k, l]) => `<button type="button" class="tile ${k === r ? 'on' : ''}" data-act="role" data-v="${k}">${ICONS[k]}<span>${l}</span></button>`).join('')}</div>
   ${form}<p class="muted" style="font-size:.8rem;text-align:center">النسخة التجريبية: إداري 1234 — معلم وطالب 0000 (غيّرها من لوحة الإدارة).</p></div>`;
+}
+
+/* ===== بحث الاسم في صفحة الدخول ===== */
+const norm = t => String(t || '').replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').toLowerCase().trim();
+const loginUsers = () => ui.loginRole === 'teacher' ? db.teachers : ui.loginRole === 'student' ? db.students : [];
+function loginMatches() {
+  const q = norm(document.getElementById('ufilter')?.value);
+  return loginUsers().filter(u => !q || norm(u.name).includes(q));
+}
+function showResults(open = true) {
+  const box = document.getElementById('uresults');
+  if (!box) return;
+  if (!open) { box.hidden = true; return; }
+  const list = loginMatches();
+  box.innerHTML = list.length
+    ? list.map(u => `<button type="button" class="opt" data-pick="${esc(u.id)}">${esc(u.name)}</button>`).join('')
+    : '<div class="muted" style="padding:.6rem .8rem">لا توجد نتائج مطابقة</div>';
+  box.hidden = false;
+}
+function pickUser(u) {
+  const f = document.getElementById('ufilter');
+  f.value = u.name; f.classList.add('picked');
+  document.getElementById('uid').value = u.id;
+  showResults(false);
+  document.querySelector('#login input[name=pin]')?.focus();
 }
 
 /* ============ الهيكل العام ============ */
@@ -300,7 +325,7 @@ const VIEWS = { admin: adminViews, teacher: teacherViews, student: studentViews 
 
 /* ============ الإجراءات ============ */
 const A = {
-  role: d => { ui.loginRole = d.v; render(); document.querySelector('#login input[name=pin]')?.focus(); },
+  role: d => { ui.loginRole = d.v; render(); document.querySelector('#ufilter, #login input[name=pin]')?.focus(); },
   logout: () => { ui.shown = {}; session = null; ss.del(SKEY); ui.tab = null; render(); },
   tab: d => { ui.tab = d.v; render(); },
   hist: d => openInfo('سجل: ' + sName(d.id), historyTable(d.id)),
@@ -398,6 +423,9 @@ const A = {
 };
 
 document.addEventListener('click', e => {
+  const pk = e.target.closest('[data-pick]');
+  if (pk) { const u = byId(loginUsers(), pk.dataset.pick); if (u) pickUser(u); return; }
+  if (!e.target.closest('#ufilter, #uresults')) showResults(false);
   const el = e.target.closest('[data-act]');
   if (el && A[el.dataset.act]) A[el.dataset.act](el.dataset);
 });
@@ -425,6 +453,10 @@ A.doLogin = () => {
   document.querySelectorAll('#login [name]').forEach(x => { v[x.name] = x.value; });
   const r = ui.loginRole;
   if (!r) return;
+  if ((r === 'teacher' || r === 'student') && !v.uid) {
+    const m = loginMatches();
+    if (m.length === 1) v.uid = m[0].id; else { toast('اختر اسمك من القائمة'); return; }
+  }
   let ok = false;
   if (r === 'admin') ok = v.pin === db.settings.adminPin;
   else { const u = byId(r === 'teacher' ? db.teachers : db.students, v.uid); ok = !!u && u.pin === v.pin; }
@@ -433,9 +465,21 @@ A.doLogin = () => {
   ss.set(SKEY, JSON.stringify(session));
   ui.tab = null; ui.hid = ''; render();
 };
+document.addEventListener('input', e => {
+  if (e.target.id !== 'ufilter') return;
+  document.getElementById('uid').value = '';
+  e.target.classList.remove('picked');
+  showResults();
+});
+document.addEventListener('focusin', e => { if (e.target.id === 'ufilter') showResults(); });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
-  if (e.target.closest('#login')) A.doLogin();
+  if (e.target.id === 'ufilter') {
+    const m = loginMatches();
+    if (document.getElementById('uid').value) document.querySelector('#login input[name=pin]')?.focus();
+    else if (m.length === 1) pickUser(m[0]);
+  }
+  else if (e.target.closest('#login')) A.doLogin();
   else e.target.closest('.modal')?.querySelector('[data-save]')?.click();
 });
 
