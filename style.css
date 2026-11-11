@@ -88,8 +88,8 @@ label input,label select,label textarea{margin-top:.2rem;color:var(--text)}
 code.pw{font-family:ui-monospace,Consolas,monospace;letter-spacing:.1em;background:var(--green-l);color:var(--green-d);padding:.1rem .55rem;border-radius:6px;direction:ltr;display:inline-block}
 
 /* ===== قائمة البحث عن الاسم ===== */
-.results{max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin:-.35rem 0 .8rem;background:#fff;box-shadow:0 6px 16px rgba(0,0,0,.08)}
-.opt{display:block;width:100%;text-align:right;border:0;border-bottom:1px solid var(--line);background:#fff;font:inherit;padding:.6rem .85rem;cursor:pointer;color:var(--text)}
+.results{max-height:calc(2.9rem * 3 + 2px);overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:10px;margin:-.35rem 0 .8rem;background:#fff;box-shadow:0 6px 16px rgba(0,0,0,.08)}
+.opt{display:flex;align-items:center;width:100%;height:2.9rem;text-align:right;border:0;border-bottom:1px solid var(--line);background:#fff;font:inherit;padding:0 .85rem;cursor:pointer;color:var(--text)}
 .opt:last-child{border-bottom:0}
 .opt:hover,.opt:focus{background:var(--green-l);outline:0}
 input.picked{border-color:var(--green);background:var(--green-l)}
