@@ -187,7 +187,7 @@ function loginView() {
   const none = !accounts().length;
   return `<div class="login"><div class="logo-wrap"><img src="${LOGO}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${LOGO});mask-image:url(${LOGO})"></div></div>
   <div class="card loginform"><div id="login">
-    <div class="combo"><label>الاسم<input type="text" id="ufilter" placeholder="اكتب بعض حروف اسمك أو اختره من القائمة" autocomplete="off"></label><div class="results" id="uresults" hidden></div></div>
+    <div class="combo"><label>الاسم<input type="text" id="ufilter" placeholder="اكتب أول حروف اسمك" autocomplete="off"></label><div class="results" id="uresults" hidden></div></div>
     <div class="modes" id="umodes" hidden></div>
     <div class="confirm" id="uinfo" hidden></div>
     <label>كلمة المرور<input name="pin" type="password" inputmode="numeric" autocomplete="off"></label>
@@ -208,12 +208,16 @@ function nameGroups() {
 }
 function loginMatches() {
   const q = norm(document.getElementById('ufilter')?.value);
-  return nameGroups().filter(g => !q || g.key.includes(q));
+  /* لا تظهر القائمة إلا بعد كتابة حرف واحد على الأقل */
+  if (!q) return [];
+  /* الأسماء التي تبدأ بالحروف المكتوبة أولًا، ثم التي تبدأ بها إحدى كلماتها، ثم الباقي */
+  const rank = k => k.startsWith(q) ? 0 : k.split(' ').some(w => w.startsWith(q)) ? 1 : 2;
+  return nameGroups().filter(g => g.key.includes(q)).sort((x, y) => rank(x.key) - rank(y.key));
 }
 function showResults(open = true) {
   const box = document.getElementById('uresults');
   if (!box) return;
-  if (!open) { box.hidden = true; return; }
+  if (!open || !norm(document.getElementById('ufilter')?.value)) { box.hidden = true; return; }
   const list = loginMatches();
   box.innerHTML = list.length
     ? list.map(g => `<button type="button" class="opt" data-pick="${esc(g.key)}">${esc(g.name)}</button>`).join('')
