@@ -251,7 +251,7 @@ const adminViews = {
     const rows = db[kind].map((m, i) => `<tr><td>${i + 1}</td><td>${esc(m.name)}</td>
       <td><code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button></td>
       <td><button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button><button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="${kind === 'students' ? 'delStudent' : 'delTeacher'}" data-id="${m.id}">حذف</button></td></tr>`).join('');
-    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span><button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
+    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span><button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button><button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
     <div class="note">عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل بها من صفحة الدخول.</div>
     ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>كلمة المرور</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
@@ -332,6 +332,208 @@ const studentViews = {
 };
 const VIEWS = { admin: adminViews, teacher: teacherViews, student: studentViews };
 
+/* ============ الاستيراد من Excel / CSV / Google Sheets ============ */
+const HDR = {
+  name: ['الاسم', 'اسم', 'اسم الطالب', 'اسم المعلم', 'name', 'full name'],
+  halaqa: ['الحلقة', 'حلقة', 'halaqa', 'group', 'class'],
+  phone: ['الجوال', 'جوال', 'رقم الجوال', 'الهاتف', 'هاتف', 'phone', 'mobile', 'tel'],
+  pin: ['كلمة المرور', 'الرمز', 'الرمز السري', 'pin', 'password']
+};
+const hkey = s => norm(s).replace(/[\s_\-:.]/g, '');
+
+function decodeText(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch (e) { return new TextDecoder('windows-1256').decode(buf); }
+}
+function parseCSV(text) {
+  text = String(text).replace(/^﻿/, '');
+  const first = text.split(/\r?\n/)[0] || '';
+  const delim = ['\t', ';', ','].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === delim) { row.push(cur); cur = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cur); cur = ''; rows.push(row); row = []; }
+    else cur += ch;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+
+/* قارئ xlsx بلا مكتبات: ملف xlsx هو أرشيف zip من ملفات XML */
+async function unzip(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf), dec = new TextDecoder();
+  let e = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('zip');
+  const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true);
+  const files = {};
+  for (let k = 0; k < n; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+    files[dec.decode(u8.subarray(p + 46, p + 46 + nl))] = { method: dv.getUint16(p + 10, true), size: dv.getUint32(p + 20, true), off: dv.getUint32(p + 42, true) };
+    p += 46 + nl + el + cl;
+  }
+  return async name => {
+    const f = files[name]; if (!f) return null;
+    const start = f.off + 30 + dv.getUint16(f.off + 26, true) + dv.getUint16(f.off + 28, true);
+    const data = u8.subarray(start, start + f.size);
+    if (f.method === 0) return dec.decode(data);
+    const out = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+    return dec.decode(out);
+  };
+}
+async function parseXLSX(buf) {
+  const get = await unzip(buf);
+  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+  const wb = await get('xl/workbook.xml');
+  if (!wb) throw new Error('xlsx');
+  let path = 'xl/worksheets/sheet1.xml';
+  try {
+    const sh = xml(wb).getElementsByTagName('sheet')[0], rid = sh.getAttribute('r:id');
+    for (const r of xml(await get('xl/_rels/workbook.xml.rels')).getElementsByTagName('Relationship')) {
+      if (r.getAttribute('Id') === rid) { const t = r.getAttribute('Target'); path = t.startsWith('/') ? t.slice(1) : 'xl/' + t; }
+    }
+  } catch (e) { /* نكتفي بالمسار الافتراضي */ }
+  const shared = [], ssx = await get('xl/sharedStrings.xml');
+  if (ssx) for (const si of xml(ssx).getElementsByTagName('si')) shared.push([...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
+  const sx = await get(path);
+  if (!sx) throw new Error('xlsx');
+  const colIdx = ref => [...ref.replace(/\d+/g, '')].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  const rows = [];
+  for (const row of xml(sx).getElementsByTagName('row')) {
+    const arr = [];
+    for (const c of row.getElementsByTagName('c')) {
+      const ref = c.getAttribute('r'), col = ref ? colIdx(ref) : arr.length, t = c.getAttribute('t');
+      let v = '';
+      if (t === 'inlineStr') v = [...c.getElementsByTagName('t')].map(x => x.textContent).join('');
+      else { const ve = c.getElementsByTagName('v')[0]; v = ve ? ve.textContent : ''; if (t === 's') v = shared[+v] ?? ''; }
+      arr[col] = v;
+    }
+    rows.push(arr);
+  }
+  return rows;
+}
+async function fetchSheet(url) {
+  const m = url.match(/\/spreadsheets\/d\/([\w-]+)/);
+  if (!m) throw new Error('url');
+  const g = url.match(/[#&?]gid=(\d+)/);
+  const r = await fetch(`https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv${g ? '&gid=' + g[1] : ''}`);
+  const t = await r.text();
+  if (!r.ok || /^\s*</.test(t)) throw new Error('private');
+  return parseCSV(t);
+}
+
+/* تحويل الجدول إلى صفوف أعضاء، مع كشف أعمدة العناوين والمكرر */
+function importRows(table, kind) {
+  const grid = table.map(r => Array.from(r || [], c => String(c ?? '').trim()));
+  let hi = -1, map = {};
+  for (let i = 0; i < Math.min(grid.length, 5) && hi < 0; i++) {
+    const m = {};
+    grid[i].forEach((c, j) => { const k = hkey(c); for (const f in HDR) if (m[f] == null && HDR[f].some(x => hkey(x) === k)) m[f] = j; });
+    if (m.name != null) { hi = i; map = m; }
+  }
+  if (hi < 0) return { err: 'لم أجد عمود «الاسم» في الصف الأول. استخدم القالب أو أضف عنوانًا للعمود.' };
+  const seen = new Set(db[kind].map(m => norm(m.name))), rows = [];
+  for (const r of grid.slice(hi + 1)) {
+    const name = (r[map.name] || '').replace(/\s+/g, ' ');
+    if (!name) continue;
+    const k = norm(name), dup = seen.has(k); seen.add(k);
+    const dg = s => String(s || '').replace(/[٠-٩]/g, c => c.charCodeAt(0) - 1632).replace(/[۰-۹]/g, c => c.charCodeAt(0) - 1776).trim();
+    rows.push({ name, halaqa: kind === 'students' ? (r[map.halaqa] || '') : '', phone: dg(r[map.phone]), pin: dg(r[map.pin]), dup });
+  }
+  return rows.length ? { rows } : { err: 'لا توجد صفوف بيانات بعد صف العناوين.' };
+}
+
+function openImport(kind) {
+  const isS = kind === 'students';
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal wide"><h2>استيراد ${isS ? 'الطلاب' : 'المعلمين'}</h2>
+  <div class="note">الصف الأول عناوين الأعمدة: ${isS ? 'الاسم، الحلقة، الجوال، كلمة المرور' : 'الاسم، الجوال، كلمة المرور'}. الاسم وحده مطلوب، وتُنشأ كلمة المرور تلقائيًا إن تُركت فارغة، والأسماء المكررة تُتجاهل.</div>
+  <div class="bar"><label class="btn" style="margin:0">اختيار ملف Excel أو CSV<input type="file" id="imf" accept=".xlsx,.csv,.tsv,.txt" hidden></label><button type="button" class="btn sm" id="imt">تحميل قالب</button></div>
+  <label>أو الصق خلايا منسوخة من Excel أو Google Sheets<textarea id="imp" rows="3"></textarea></label>
+  <label>أو رابط Google Sheets (مشارك لكل من لديه الرابط)<input id="imu" type="url" dir="ltr" placeholder="https://docs.google.com/spreadsheets/d/..."></label>
+  <div class="bar"><button type="button" class="btn" id="imgo">معاينة</button></div>
+  <div id="imprev"></div>
+  <div class="row"><button type="button" class="btn primary" id="imok" disabled>استيراد</button><button type="button" class="btn" data-close>إغلاق</button></div></div>`;
+  document.body.appendChild(ov);
+  const $ = s => ov.querySelector(s);
+  let parsed = [], createH = true;
+  $('[data-close]').onclick = () => ov.remove();
+
+  const msg = (t, bad) => {
+    $('#imprev').innerHTML = `<div class="note"${bad ? ' style="background:#fdf1f0;border-color:#e8c4c0;color:var(--red)"' : ''}>${esc(t)}</div>`;
+    $('#imok').disabled = true;
+  };
+  function preview() {
+    const fresh = parsed.filter(r => !r.dup), dups = parsed.length - fresh.length;
+    const known = new Set(db.halaqat.map(h => norm(h.name)));
+    const newH = isS ? new Set(fresh.filter(r => r.halaqa && !known.has(norm(r.halaqa))).map(r => norm(r.halaqa))) : new Set();
+    $('#imprev').innerHTML = `<p style="margin:.2rem 0 .6rem"><b>${fresh.length}</b> جاهز للاستيراد${dups ? ` — ${dups} مكرر سيُتجاهل` : ''}</p>
+    ${newH.size ? `<label style="display:flex;gap:.5rem;align-items:center;color:var(--text)"><input type="checkbox" id="imh" style="width:auto;margin:0" ${createH ? 'checked' : ''}> إنشاء ${newH.size} حلقة غير موجودة تلقائيًا</label>` : ''}
+    <div class="tbl"><table><tr><th>الاسم</th>${isS ? '<th>الحلقة</th>' : ''}<th>الجوال</th><th>الحالة</th></tr>${parsed.slice(0, 8).map(r => `<tr><td>${esc(r.name)}</td>${isS ? `<td>${esc(r.halaqa || '—')}</td>` : ''}<td>${esc(r.phone || '—')}</td><td>${r.dup ? '<span class="tag" style="background:#fbeceb;color:var(--red)">مكرر</span>' : '<span class="tag">جديد</span>'}</td></tr>`).join('')}</table></div>
+    ${parsed.length > 8 ? `<p class="muted" style="margin:.4rem 0 0">… و${parsed.length - 8} صفوف أخرى</p>` : ''}`;
+    const cb = $('#imh'); if (cb) cb.onchange = () => { createH = cb.checked; };
+    $('#imok').disabled = !fresh.length;
+  }
+  function go(table) {
+    const r = importRows(table, kind);
+    if (r.err) { msg(r.err, true); return; }
+    parsed = r.rows; preview();
+  }
+
+  $('#imf').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    msg('جارٍ قراءة الملف…');
+    try {
+      const buf = await f.arrayBuffer(), u8 = new Uint8Array(buf);
+      if (/\.xls$/i.test(f.name)) throw new Error('xls');
+      go(/\.xlsx$/i.test(f.name) || (u8[0] === 0x50 && u8[1] === 0x4b) ? await parseXLSX(buf) : parseCSV(decodeText(buf)));
+    } catch (err) {
+      msg(err.message === 'xls' ? 'صيغة xls القديمة غير مدعومة. احفظ الملف بصيغة xlsx أو CSV ثم أعد المحاولة.' : 'تعذّرت قراءة الملف. جرّب حفظه بصيغة CSV أو الصق الخلايا مباشرة.', true);
+    }
+    e.target.value = '';
+  };
+  $('#imgo').onclick = async () => {
+    const u = $('#imu').value.trim(), p = $('#imp').value;
+    try {
+      if (u) { msg('جارٍ جلب الملف…'); go(await fetchSheet(u)); }
+      else if (p.trim()) go(parseCSV(p));
+      else msg('اختر ملفًا أو الصق البيانات أو ضع رابط Google Sheets.', true);
+    } catch (err) {
+      msg(err.message === 'url' ? 'الرابط ليس رابط Google Sheets صالحًا.' : 'تعذّر جلب الملف. تأكد أن مشاركته «أي شخص لديه الرابط»، أو انسخ الخلايا والصقها هنا.', true);
+    }
+  };
+  $('#imu').addEventListener('keydown', e => { if (e.key === 'Enter') $('#imgo').click(); });
+  $('#imt').onclick = () => {
+    const csv = '﻿' + (isS ? 'الاسم,الحلقة,الجوال,كلمة المرور\nمحمد أحمد,حلقة الفرقان,,\n' : 'الاسم,الجوال,كلمة المرور\nأحمد علي,,\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = isS ? 'قالب-الطلاب.csv' : 'قالب-المعلمين.csv'; a.click(); URL.revokeObjectURL(a.href);
+  };
+  $('#imok').onclick = () => {
+    const hmap = new Map(db.halaqat.map(h => [norm(h.name), h.id]));
+    let n = 0, nh = 0;
+    parsed.filter(r => !r.dup).forEach(r => {
+      let hid = '';
+      if (isS && r.halaqa) {
+        const k = norm(r.halaqa);
+        if (hmap.has(k)) hid = hmap.get(k);
+        else if (createH) { hid = uid(); db.halaqat.push({ id: hid, name: r.halaqa, teacherId: '', schedule: '', place: '' }); hmap.set(k, hid); nh++; }
+      }
+      const id = uid(), pin = r.pin || genPass();
+      db[kind].push(isS ? { id, name: r.name, halaqaId: hid, phone: r.phone, pin } : { id, name: r.name, phone: r.phone, pin });
+      if (!r.pin) ui.shown[id] = true;
+      n++;
+    });
+    ov.remove(); save(); render();
+    toast(`تم استيراد ${n} ${isS ? 'طالب' : 'معلم'}${nh ? ` وإنشاء ${nh} حلقة` : ''}`);
+  };
+}
+
 /* ============ الإجراءات ============ */
 const A = {
   role: d => { ui.loginRole = d.v; render(); document.querySelector('#ufilter, #login input[name=pin]')?.focus(); },
@@ -352,6 +554,7 @@ const A = {
   },
 
   msub: d => { ui.msub = d.v; render(); },
+  importMembers: d => { if (session?.role === 'admin') openImport(d.k === 'students' ? 'students' : 'teachers'); },
   togglePw: d => { ui.shown[d.id] = !ui.shown[d.id]; render(); },
   copyPw: d => {
     const m = byId(db[d.k], d.id);
