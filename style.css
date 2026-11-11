@@ -31,7 +31,9 @@ main{max-width:1000px;margin:0 auto;padding:1rem}
 .bar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.75rem}
 .bar .grow{flex:1}
 .btn{font:inherit;border:1px solid var(--line);background:#fff;color:var(--text);padding:.4rem .85rem;border-radius:8px;cursor:pointer}
-.btn:hover{background:var(--green-l)}
+.btn:not(.on):not(.primary):hover{background:var(--green-l)}
+.btn.on:hover{filter:brightness(.92)}
+.top .btn:not(.on):not(.primary):hover{background:rgba(255,255,255,.15)}
 .btn.primary{background:var(--green);color:#fff;border-color:var(--green)}
 .btn.primary:hover{background:var(--green-d)}
 .btn.danger{color:var(--red);border-color:#e8c4c0}
