@@ -66,7 +66,7 @@ function seed() {
   return {
     settings: { org: 'إدارة الحلقات القرآنية', adminPin: '1234' },
     teachers: [{ id: t1, name: 'الشيخ أحمد', phone: '', pin: '0000' }],
-    halaqat: [{ id: h1, name: 'حلقة الفرقان', teacherId: t1, schedule: 'بعد صلاة العصر' }],
+    halaqat: [{ id: h1, name: 'حلقة الفرقان', teacherId: t1, schedule: 'بعد صلاة العصر', place: 'المسجد الكبير' }],
     students: names.map(n => ({ id: uid(), name: n, halaqaId: h1, phone: '', pin: '0000' })),
     attendance: [], records: [], news: []
   };
@@ -162,7 +162,8 @@ function loginView() {
   const pick = list => list.length
     ? `<div class="combo"><label>${r === 'teacher' ? 'المعلم' : 'الطالب'}<input type="text" id="ufilter" placeholder="اكتب بعض حروف الاسم أو اختره من القائمة" autocomplete="off"></label><input type="hidden" name="uid" id="uid" value=""><div class="results" id="uresults" hidden></div></div>`
     : `<p class="muted">لا يوجد ${r === 'teacher' ? 'معلمون' : 'طلاب'} بعد. ادخل كإداري لإضافتهم.</p>`;
-  const who = r === 'teacher' ? pick(db.teachers) : r === 'student' ? pick(db.students) : '';
+  const confirmBox = '<div class="confirm" id="uconfirm" hidden><div class="info"><small>الحلقة</small><b id="uhal">—</b></div><div class="info"><small>المكان</small><b id="uplace">—</b></div></div>';
+  const who = r === 'teacher' ? pick(db.teachers) : r === 'student' ? pick(db.students) + (db.students.length ? confirmBox : '') : '';
   const form = r
     ? `<div class="card loginform"><div id="login">${who}<label>كلمة المرور<input name="pin" type="password" inputmode="numeric" autocomplete="off"></label><button type="button" class="btn primary" style="width:100%" data-act="doLogin">دخول</button></div></div>`
     : '<p class="muted" style="text-align:center">اختر نوع الدخول للمتابعة</p>';
@@ -193,6 +194,13 @@ function pickUser(u) {
   f.value = u.name; f.classList.add('picked');
   document.getElementById('uid').value = u.id;
   showResults(false);
+  const box = document.getElementById('uconfirm');
+  if (box) {
+    const h = byId(db.halaqat, u.halaqaId);
+    document.getElementById('uhal').textContent = h?.name || 'غير محدد';
+    document.getElementById('uplace').textContent = h?.place || 'غير محدد';
+    box.hidden = false;
+  }
   document.querySelector('#login input[name=pin]')?.focus();
 }
 
@@ -252,7 +260,7 @@ const adminViews = {
   },
   halaqat() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الحلقات</h2><button class="btn primary" data-act="addHalaqa">+ حلقة</button></div>
-    ${db.halaqat.length ? `<div class="tbl"><table><tr><th>الحلقة</th><th>المعلم</th><th>الموعد</th><th>الطلاب</th><th></th></tr>${db.halaqat.map(h => `<tr><td>${esc(h.name)}</td><td>${esc(tName(h.teacherId))}</td><td>${esc(h.schedule)}</td><td>${db.students.filter(s => s.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا توجد حلقات.')}</div>`;
+    ${db.halaqat.length ? `<div class="tbl"><table><tr><th>الحلقة</th><th>المعلم</th><th>الموعد</th><th>المكان</th><th>الطلاب</th><th></th></tr>${db.halaqat.map(h => `<tr><td>${esc(h.name)}</td><td>${esc(tName(h.teacherId))}</td><td>${esc(h.schedule)}</td><td>${esc(h.place)}</td><td>${db.students.filter(s => s.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا توجد حلقات.')}</div>`;
   },
   students() {
     const list = db.students.filter(s => !ui.fh || s.halaqaId === ui.fh);
@@ -314,7 +322,7 @@ const studentViews = {
   me() {
     const s = byId(db.students, session.id);
     const stats = [[lastHifz(s.id), 'آخر موضع حفظ'], [hifzAyat(s.id), 'آيات مسجّلة حفظًا'], [attRate(s.id), 'نسبة الحضور'], [recsOf(s.id).length, 'عدد التسميعات']];
-    return `<div class="card"><h2>أهلًا ${esc(s.name)}</h2><p class="muted" style="margin:0">الحلقة: ${esc(hName(s.halaqaId))} — المعلم: ${esc(tName(byId(db.halaqat, s.halaqaId)?.teacherId))}</p></div>
+    return `<div class="card"><h2>أهلًا ${esc(s.name)}</h2><p class="muted" style="margin:0">الحلقة: ${esc(hName(s.halaqaId))} — المكان: ${esc(byId(db.halaqat, s.halaqaId)?.place || '—')} — المعلم: ${esc(tName(byId(db.halaqat, s.halaqaId)?.teacherId))}</p></div>
     <div class="grid">${stats.map(([n, l]) => `<div class="stat"><b style="font-size:1.2rem">${esc(n)}</b><span>${l}</span></div>`).join('')}</div>
     <div class="card"><h2>آخر التسميعات</h2>${recsOf(s.id).slice(0, 5).map(r => `<div class="news">${esc(recLine(r))} — <b>${esc(r.grade)}</b><br><small>${esc(r.date)} ${esc(r.note)}</small></div>`).join('') || empty('لا توجد تسجيلات بعد.')}</div>`;
   },
@@ -372,10 +380,10 @@ const A = {
     v => { Object.assign(t, { name: v.name.trim(), phone: v.phone, pin: v.pin }); }); },
   delTeacher: d => ask('حذف المعلم؟ ستبقى حلقاته بدون معلم.', () => { db.teachers = db.teachers.filter(t => t.id !== d.id); db.halaqat.forEach(h => { if (h.teacherId === d.id) h.teacherId = ''; }); save(); render(); }),
 
-  addHalaqa: () => openForm('حلقة جديدة', [{ name: 'name', label: 'اسم الحلقة', required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'schedule', label: 'الموعد' }],
-    v => { db.halaqat.push({ id: uid(), name: v.name.trim(), teacherId: v.teacherId, schedule: v.schedule }); }),
-  editHalaqa: d => { const h = byId(db.halaqat, d.id); openForm('تعديل حلقة', [{ name: 'name', label: 'اسم الحلقة', value: h.name, required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', value: h.teacherId, options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'schedule', label: 'الموعد', value: h.schedule }],
-    v => { Object.assign(h, { name: v.name.trim(), teacherId: v.teacherId, schedule: v.schedule }); }); },
+  addHalaqa: () => openForm('حلقة جديدة', [{ name: 'name', label: 'اسم الحلقة', required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'schedule', label: 'الموعد' }, { name: 'place', label: 'المكان' }],
+    v => { db.halaqat.push({ id: uid(), name: v.name.trim(), teacherId: v.teacherId, schedule: v.schedule, place: v.place.trim() }); }),
+  editHalaqa: d => { const h = byId(db.halaqat, d.id); openForm('تعديل حلقة', [{ name: 'name', label: 'اسم الحلقة', value: h.name, required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', value: h.teacherId, options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'schedule', label: 'الموعد', value: h.schedule }, { name: 'place', label: 'المكان', value: h.place || '' }],
+    v => { Object.assign(h, { name: v.name.trim(), teacherId: v.teacherId, schedule: v.schedule, place: v.place.trim() }); }); },
   delHalaqa: d => ask('حذف الحلقة؟ سيبقى طلابها بدون حلقة.', () => { db.halaqat = db.halaqat.filter(h => h.id !== d.id); db.students.forEach(s => { if (s.halaqaId === d.id) s.halaqaId = ''; }); save(); render(); }),
 
   addStudent: () => openForm('طالب جديد', [{ name: 'name', label: 'الاسم', required: true }, { name: 'halaqaId', label: 'الحلقة', type: 'select', value: ui.fh, options: [{ v: '', l: '— بدون —' }, ...opts(db.halaqat)] }, { name: 'phone', label: 'جوال ولي الأمر', type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: genPass(), required: true }],
@@ -470,6 +478,7 @@ document.addEventListener('input', e => {
   if (e.target.id !== 'ufilter') return;
   document.getElementById('uid').value = '';
   e.target.classList.remove('picked');
+  const cb = document.getElementById('uconfirm'); if (cb) cb.hidden = true;
   showResults();
 });
 document.addEventListener('focusin', e => { if (e.target.id === 'ufilter') showResults(); });

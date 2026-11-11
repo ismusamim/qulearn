@@ -98,3 +98,10 @@ input.picked{border-color:var(--green);background:var(--green-l)}
 .combo{position:relative;margin-bottom:.8rem}
 .combo label{margin-bottom:0}
 .combo .results{position:absolute;inset-inline:0;top:calc(100% + 4px);z-index:20;margin:0}
+
+/* ===== مربعا تأكيد هوية الطالب (للقراءة فقط) ===== */
+.confirm{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.9rem}
+.confirm[hidden]{display:none}
+.info{background:var(--green-l);border:1px solid #cfe5db;border-radius:10px;padding:.5rem .75rem;user-select:none}
+.info small{display:block;color:var(--muted);font-size:.78rem}
+.info b{color:var(--green-d);overflow-wrap:anywhere}
