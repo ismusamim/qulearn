@@ -419,7 +419,11 @@ function onChange(e) {
       try {
         const j = JSON.parse(rd.result), d = j.payroll || j;
         if (!Array.isArray(d.employees) || !Array.isArray(d.rows)) throw new Error('bad');
-        Q().ask(`استيراد ${d.employees.length} موظف و${d.rows.length} صف رواتب؟ ستُستبدل بيانات المرتبات الحالية.`, () => {
+        /* غياب مكرر لنفس الموظف في نفس اليوم: يُكتفى بالأول (قاعدة البيانات لا تقبل التكرار) */
+        const seenAbs = new Set(), dups = [];
+        d.absences = (d.absences || []).filter(a => { if (!a.date) return true; const k2 = a.eid + '|' + a.date; if (seenAbs.has(k2)) { dups.push(a); return false; } seenAbs.add(k2); return true; });
+        const dupNote = dups.length ? ` (تم تجاهل ${dups.length} غياب مكرر لنفس الموظف في نفس اليوم: ${dups.map(a => `${a.name || ''} ${a.date}`).join('، ')})` : '';
+        Q().ask(`استيراد ${d.employees.length} موظف و${d.rows.length} صف رواتب و${d.absences.length} يوم غياب؟ ستُستبدل بيانات المرتبات الحالية.${dupNote}`, () => {
           Q().db.payroll = d; P(); st.y = null; st.sub = 'month'; Q().save(); Q().render(); Q().toast('تم استيراد بيانات المرتبات');
         });
       } catch (err) { Q().toast('ملف غير صالح'); }
