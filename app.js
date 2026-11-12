@@ -71,6 +71,12 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.g
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const byId = (arr, id) => arr.find(x => x.id === id);
 const empty = t => `<div class="empty">${esc(t)}</div>`;
+/* تصحيح الاسم عند حفظه: «عبدالله» ← «عبد الله»، «عبدالرحمن» ← «عبد الرحمن»، «عبدربه» ← «عبد ربه» (و«عبده» يبقى كما هو) */
+const fixName = s => String(s || '').replace(/\s+/g, ' ').trim().replace(/(^|\s)عبد(?=ال|رب)/g, '$1عبد ');
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t?.tagName === 'INPUT' && /^(name|gName|fullName)$/.test(t.name || '') && fixName(t.value) !== t.value) t.value = fixName(t.value);
+}, true);
 function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.hidden = false;
@@ -120,6 +126,11 @@ function migrate(d) {
     if (m) h.time = { mode: 'prayer', fromPrayer: m[1], toKind: 'prayer', toPrayer: '' };
   });
   delete d.settings.adminPin;
+  if (!Array.isArray(d.fees)) d.fees = [];
+  /* الأسماء المحفوظة سابقًا تُصحَّح بالقاعدة نفسها (عبدالله ← عبد الله) */
+  const fx = o => { if (o && typeof o.name === 'string') { const n = fixName(o.name); if (n !== o.name) o.name = n; } };
+  ['admins', 'supervisors', 'teachers', 'students'].forEach(k => d[k].forEach(fx));
+  if (d.payroll) { (d.payroll.employees || []).forEach(fx); (d.payroll.rows || []).forEach(fx); }
   return d;
 }
 function load() {
@@ -408,7 +419,9 @@ function loginView() {
 }
 
 /* ===== بحث الاسم في صفحة الدخول (كل الحسابات في قائمة واحدة) ===== */
-const norm = t => String(t || '').replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ').toLowerCase().trim();
+/* قواعد البحث والمقارنة: التشكيل يُتجاهل، والهمزات (أ إ آ) = ا، والتاء المربوطة = الهاء، والألف المقصورة = الياء،
+   و«عبد الله» = «عبدالله» (المسافة بعد «عبد» لا تُحسب) */
+const norm = t => String(t || '').replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ').trim().replace(/(^| )عبد /g, '$1عبد').toLowerCase();
 /* تُجمع الحسابات بالاسم: الاسم الواحد قد يكون له أكثر من وضع (معلم وطالب مثلًا) */
 function nameGroups() {
   const m = new Map();
@@ -569,7 +582,7 @@ const adminViews = {
   halaqat() {
     const studentsIn = list => db.students.filter(st => list.some(h => h.id === st.halaqaId)).length;
     const table = list => `<div class="tbl"><table><tr><th>الحلقة</th><th>المشرف</th><th>الوقت</th><th>الطلاب</th><th></th></tr>${list.map(h => `<tr><td><b>${esc(halaqaLabel(h))}</b>${h.teacherId ? '' : ' <span class="tag">بلا معلم</span>'}</td><td>${esc(supName(h.supervisorId))}</td><td>${esc(timeText(h) || '—')}</td><td>${db.students.filter(st => st.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>`;
-    const card = (pl, list) => `<div class="card place"><div class="bar"><span class="pico">${pl ? (pl.type === 'دار تحفيظ' ? TAB_ICONS.house : TAB_ICONS.mosque) : TAB_ICONS.halaqat}</span><h2 class="grow" style="margin:0">${esc(pl ? pl.name : 'حلقات لم يُحدَّد مكانها')} ${pl ? `<span class="tag">${esc(pl.type)}</span>` : ''}</h2><span class="muted">${list.length} حلقة · ${studentsIn(list)} طالب</span>
+    const card = (pl, list) => `<div class="card place"><div class="bar"><span class="pico">${pl ? (pl.type === 'دار تحفيظ' ? TAB_ICONS.house : TAB_ICONS.mosque) : TAB_ICONS.halaqat}</span><h2 class="grow" style="margin:0">${esc(pl ? pl.name : 'حلقات لم يُحدَّد مكانها')} ${pl ? `<span class="tag">${esc(pl.type)}</span>` : ''}</h2><span class="muted">${list.length} حلقة · ${studentsIn(list)} طالب</span>
       ${pl ? `<button class="btn sm primary" data-act="addHalaqa" data-p="${pl.id}">+ حلقة هنا</button><button class="btn sm" data-act="editPlace" data-id="${pl.id}">تعديل المكان</button><button class="btn sm danger" data-act="delPlace" data-id="${pl.id}">حذف</button>` : ''}</div>
       ${pl?.address ? `<p class="muted" style="margin:-.3rem 0 .7rem">${esc(pl.address)}</p>` : ''}
       ${list.length ? table(list) : empty('لا توجد حلقات في هذا المكان بعد.')}</div>`;
@@ -602,7 +615,7 @@ const adminViews = {
       <div class="logo-edit"><img class="logo-prev" src="${logoSrc()}" alt="الشعار الحالي">
         <div class="bar"><label class="btn sm primary" style="margin:0">رفع شعار جديد<input type="file" accept="image/*" data-change="logo" hidden></label>${db.settings.logo ? '<button class="btn sm" data-act="logoReset">الشعار الافتراضي</button>' : ''}</div>
         <button class="btn sm" style="width:100%" data-act="themeFromLogo">استخراج الألوان من الشعار</button>
-        <p class="muted" style="font-size:.78rem;margin:.5rem 0 0">PNG أو SVG بخلفية شفافة يعطي أفضل نتيجة. يُصغَّر تلقائيًا ويظهر في الشاشة الافتتاحية وصفحة الدخول والشريط العلوي.</p>
+        <p class="muted" style="font-size:.78rem;margin:.5rem 0 0">PNG أو SVG بخلفية شفافة يعطي أفضل نتيجة. يُصغَّر تلقائيًا ويظهر في الشاشة الافتتاحية وصفحة الدخول والشريط العلوي.</p>
       </div>
       <div><div class="swatches">${sw}</div>
         <h3 style="font-size:.95rem;margin:1rem 0 .5rem">أنماط جاهزة</h3><div class="presets">${pre}</div>
@@ -675,4 +688,3 @@ const absenceView = () => window.Payroll ? window.Payroll.absView() : `<div clas
 adminViews.absence = absenceView;
 const supervisorViews = { att: teacherViews.att, mine: teacherViews.mine, absence: absenceView, news: () => newsView('supervisor') };
 const VIEWS = { admin: adminViews, teacher: teacherViews, supervisor: supervisorViews, student: studentViews };
-
