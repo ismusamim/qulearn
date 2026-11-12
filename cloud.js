@@ -212,7 +212,7 @@ const SYNC_TABLES = {
 };
 const MEMBER_COLS = 'id,user_id,login_email,role,name,phone,halaqa_id,cat,info,extra,has_photo';
 const FULL_EVERY = 30 * 60000;
-let raw = null, since = null, lastFull = 0, inc = null, lastChanged = true;
+let raw = null, since = null, lastFull = 0, inc = null, scoped = false, lastChanged = true;
 const photoCache = new Map();   // معرّف العضو ← الصورة ('' = بلا صورة)
 const photoSent = new Map();    // معرّف العضو ← بصمة الصورة كما هي على الخادم (للصور المعروفة فقط)
 const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return s.length + ':' + h; };
@@ -228,26 +228,53 @@ function notePhoto(r, incremental) {
   if (!r.has_photo) { photoCache.set(r.id, ''); photoSent.set(r.id, hashStr('')); }
   else if (incremental || photoCache.get(r.id) === '') { photoCache.delete(r.id); photoSent.delete(r.id); }
 }
-async function fetchTables(tables, filter = '') {
-  const got = await Promise.all(tables.map(t => selectAll(t, SYNC_TABLES[t].join(','), filter, t === 'members' && inc ? MEMBER_COLS : '*')));
+/* غير المدير لا يُنزّل إلا نطاقه: حلقاته وطلابها وأسماء العاملين معه (والمشرف كل الأماكن لنموذج الغياب) */
+const inList = a => '(' + (a || []).join(',') + ')';
+function scopeFilter(t, chk) {
+  if (!chk?.hal) return '';
+  if (t === 'members') return '&id=in.' + inList([...new Set([...(chk.ids || []), ...(chk.stu || [])])]);
+  if (t === 'halaqat') return '&id=in.' + inList(chk.hal);
+  if (t === 'places' && !chk.sup) return '&id=in.' + inList(chk.pl);
+  if (t === 'member_admin') return '&member_id=in.' + inList(chk.me);
+  return '';
+}
+const sameSet = (a, b) => { a = a || []; b = b || []; if (a.length !== b.length) return false; const s = new Set(a); return b.every(x => s.has(x)); };
+async function fetchTables(tables, filter = '', chk = null) {
+  const got = await Promise.all(tables.map(t => selectAll(t, SYNC_TABLES[t].join(','), filter + scopeFilter(t, chk), t === 'members' && inc ? MEMBER_COLS : '*')));
   return Object.fromEntries(tables.map((t, i) => [t, got[i]]));
 }
+const backMinute = ts => new Date(new Date(ts).getTime() - 60000).toISOString();
 async function pull() {
   const role = auth?.member?.role, tables = tablesFor(role);
-  if (inc === null) { try { await rpc('sync_now'); inc = true; } catch (e) { inc = false; } }
-  if (inc && raw && raw.role === role && since && Date.now() - lastFull < FULL_EVERY) {
-    const now = await rpc('sync_now'), f = '&sync_ts=gt.' + encodeURIComponent(since);
-    const [got, tomb] = await Promise.all([fetchTables(tables, f), selectAll('sync_deleted', 'rev', '&at=gt.' + encodeURIComponent(since))]);
+  if (inc === null) {
+    try { await rpc('sync_check', { since: new Date().toISOString() }); inc = true; scoped = true; }
+    catch (e) { scoped = false; try { await rpc('sync_now'); inc = true; } catch (e2) { inc = false; } }
+  }
+  /* سؤال واحد صغير للخادم: هل تغيّر شيء يخص هذا المستخدم؟ إن لم يتغير شيء لا تحدث مزامنة أصلًا */
+  const chk = scoped ? await rpc('sync_check', { since: since || new Date().toISOString() }) : null;
+  let mode = 'full';
+  if (inc && raw && raw.role === role && since) {
+    if (!scoped) mode = Date.now() - lastFull < FULL_EVERY ? 'inc' : 'full';
+    else if (chk.hal && (!sameSet(chk.hal, raw.hal) || !sameSet(chk.stu, raw.stu))) mode = 'full'; // تغيّر نطاقه: حلقة جديدة أو طالب انتقل
+    else if (!chk.tables.length) mode = 'none';
+    else mode = role === 'admin' && Date.now() - lastFull >= FULL_EVERY ? 'full' : 'inc';
+  }
+  if (mode === 'none') { lastChanged = false; since = backMinute(chk.now); }
+  else if (mode === 'inc') {
+    const now = scoped ? chk.now : await rpc('sync_now'), f = '&sync_ts=gt.' + encodeURIComponent(since);
+    const want = scoped ? tables.filter(t => chk.tables.includes(t)) : tables;
+    const tombF = '&at=gt.' + encodeURIComponent(since) + (chk?.hal ? `&or=(tbl.in.(settings,news,custom_fields${chk.sup ? ',places,absences' : ''}),scope.ov.${encodeURIComponent('{' + [...(chk.ids || []), ...(chk.stu || []), ...chk.hal, ...(chk.pl || [])].join(',') + '}')})` : '');
+    const [got, tomb] = await Promise.all([fetchTables(want, f, chk), !scoped || chk.tables.includes('deleted') ? selectAll('sync_deleted', 'rev', tombF) : []]);
     lastChanged = false;
-    for (const t of tables) for (const r of got[t]) { raw[t].set(pkOf(t, r), r); lastChanged = true; if (t === 'members') notePhoto(r, true); }
+    for (const t of want) for (const r of got[t]) { raw[t].set(pkOf(t, r), r); lastChanged = true; if (t === 'members') notePhoto(r, true); }
     for (const d of tomb) { const m = raw[d.tbl]; if (m && m.delete(SYNC_TABLES[d.tbl].map(c => d.pk[c]).join('|'))) lastChanged = true; }
-    since = new Date(new Date(now).getTime() - 60000).toISOString();
+    since = backMinute(now);
   } else {
-    const now = inc ? await rpc('sync_now') : null;
-    const got = await fetchTables(tables);
-    raw = { role };
+    const now = scoped ? chk.now : inc ? await rpc('sync_now') : null;
+    const got = await fetchTables(tables, '', chk);
+    raw = { role, hal: chk?.hal, stu: chk?.stu };
     for (const t of tables) { raw[t] = new Map(got[t].map(r => [pkOf(t, r), r])); if (t === 'members') got[t].forEach(r => notePhoto(r, false)); }
-    since = now ? new Date(new Date(now).getTime() - 60000).toISOString() : null;
+    since = now ? backMinute(now) : null;
     lastFull = Date.now(); lastChanged = true;
   }
   const rows = t => (raw[t] ? [...raw[t].values()] : []);
@@ -278,12 +305,13 @@ async function pull() {
       absences: abs.map(absFromRow)
     };
   } else if (role === 'supervisor') {
-    const abs = rows('absences'), [staff, cur] = await Promise.all([rpc('staff_list'), rpc('current_pay_month').catch(() => null)]);
+    /* قائمة العاملين وشهر المرتبات الحالي: تُجلب عند الجلب الكامل أو إن تغيّرت فقط */
+    if (mode === 'full' || !raw.extras || !scoped || chk.tables.includes('staff')) { raw.extras = await Promise.all([rpc('staff_list'), rpc('current_pay_month').catch(() => null)]); lastChanged = true; }
+    const abs = rows('absences'), [staff, cur] = raw.extras;
     const c = Array.isArray(cur) ? cur[0] : cur;
     db.payroll = { settings: {}, employees: (staff || []).map(e => ({ id: e.id, code: e.code || '', name: e.name, place: e.place || '', status: e.status })), rows: [], closed: [], absences: abs.map(absFromRow), curMonth: c && c.y ? { y: c.y, m: c.m } : null, readOnly: true };
   }
-  snap = snapshotOf(db);
-  saveLocal(db);
+  if (mode !== 'none' || !snap) { snap = snapshotOf(db); saveLocal(db); }
   lastSync = new Date(); lastError = ''; emit();
   return db;
 }
