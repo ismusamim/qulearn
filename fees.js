@@ -12,6 +12,7 @@
   TABS.admin.splice(TABS.admin.findIndex(t => t[0] === 'payroll') + 1, 0, ['fees', 'الاشتراكات']);
   TAB_ICONS.fees = svg('<rect x="2" y="6" width="20" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.6"/><path d="M6 9.5v6M18 9.5v6"/>');
   adminViews.fees = () => view();
+  window.FeesView = () => view();
   /* يُضاف هذا الملف لفحص التحديث التلقائي (القائمة تُعرَّف في app-actions.js الذي يُحمَّل بعده) */
   setTimeout(() => { try { if (!VFILES.includes('./fees.js')) VFILES.push('./fees.js'); } catch (e) { /* ignore */ } }, 0);
 
@@ -64,6 +65,9 @@
     return out;
   };
   const cloudMissing = () => CLOUD && window.Cloud?.feesReady === false;
+  /* الأزرار بحسب الصلاحية: المدير كل شيء، والمحاسب (أو من مُنح) بحسب صلاحياته */
+  const can = p => (window.Perms ? Perms.can(p) : session?.role === 'admin');
+  const isAdmin = () => session?.role === 'admin';
 
   function filtered() {
     const qs = norm(st.qs), qh = norm(st.qh), qp = norm(st.qp);
@@ -76,10 +80,10 @@
   }
   function results() {
     const list = filtered();
-    let expected = 0, got = 0, paidN = 0, partN = 0, noneN = 0, freeN = 0;
+    let expected = 0, got = 0, paidN = 0, partN = 0, noneN = 0, freeN = 0, offN = 0;
     const row = (s, i) => {
-      const D = dueOf(s), fee = D?.due ?? null, paid = paidFor(s.id, st.y, st.m), h = halOf(s);
-      const state = fee === 0 ? '<span class="tag tag-ok">معفى</span>'
+      const D = dueOf(s), fee = D?.due ?? null, paid = paidFor(s.id, st.y, st.m), h = halOf(s), off = stOff(s);
+      const state = off ? `<span class="tag tag-no">منقطع</span>${paid ? ' <small class="muted">دفع ' + money(paid) + '</small>' : ''}` : fee === 0 ? '<span class="tag tag-ok">معفى</span>'
         : fee ? (paid >= fee ? '<span class="tag tag-ok">مسدَّد ✓</span>' : paid > 0 ? `<span class="tag">جزئي: باقٍ ${money(fee - paid)}</span>` : '<span class="tag tag-no">لم يُسدَّد</span>')
         : (paid > 0 ? '<span class="tag tag-ok">مدفوع</span>' : '<span class="muted">بلا اشتراك محدد</span>');
       const catCell = D ? `${esc(D.src)}${D.dl ? `<br><small class="tag">${esc(D.dl)}</small>` : ''}` : '<span class="muted">—</span>';
@@ -87,15 +91,16 @@
       const any = fees().some(f => f.studentId === s.id);
       return `<tr><td>${i + 1}</td><td>${esc(s.name)}</td><td>${h ? esc(halaqaLabel(h)) : '<span class="muted">—</span>'}</td><td>${h ? esc(placeName(h) || '—') : '<span class="muted">—</span>'}</td>
         <td>${catCell}</td><td>${dueCell}</td><td>${paid ? money(paid) : '—'}</td><td>${state}</td>
-        <td class="noprint"><button type="button" class="btn sm primary" data-fee-pay="${esc(s.id)}" ${cloudMissing() || fee === 0 ? 'disabled' : ''}>تحصيل</button>${any ? `<button type="button" class="btn sm" data-fee-log="${esc(s.id)}">السجل</button>` : ''}<button type="button" class="btn sm" data-fee-assign="${esc(s.id)}">الفئة</button></td></tr>`;
+        <td class="noprint">${can('fees.collect') ? `<button type="button" class="btn sm primary" data-fee-pay="${esc(s.id)}" ${cloudMissing() || fee === 0 ? 'disabled' : ''}>تحصيل</button>` : ''}${any ? `<button type="button" class="btn sm" data-fee-log="${esc(s.id)}">السجل</button>` : ''}${can('fees.amount') ? `<button type="button" class="btn sm" data-fee-assign="${esc(s.id)}">الفئة</button>` : ''}</td></tr>`;
     };
     list.forEach(s => {
       const fee = feeOf(s), paid = paidFor(s.id, st.y, st.m); got += paid;
-      if (fee === 0) freeN++;
+      if (stOff(s)) offN++;
+      else if (fee === 0) freeN++;
       else if (fee) { expected += fee; if (paid >= fee) paidN++; else if (paid > 0) partN++; else noneN++; } else if (paid > 0) paidN++;
     });
     const stat = (v, l) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`;
-    return `<div class="grid">${stat(money(got), 'المحصَّل في ' + MONTHS[st.m - 1])}${stat(money(expected), 'المتوقع')}${stat(paidN, 'مسدَّد')}${stat(partN, 'جزئي')}${stat(noneN, 'لم يُسدَّد')}${freeN ? stat(freeN, 'معفى') : ''}</div>
+    return `<div class="grid">${stat(money(got), 'المحصَّل في ' + MONTHS[st.m - 1])}${stat(money(expected), 'المتوقع')}${stat(paidN, 'مسدَّد')}${stat(partN, 'جزئي')}${stat(noneN, 'لم يُسدَّد')}${freeN ? stat(freeN, 'معفى') : ''}${offN ? stat(offN, 'منقطع') : ''}</div>
       ${list.length ? `<div class="tbl"><table><tr><th>#</th><th>الطالب</th><th>الحلقة</th><th>المكان</th><th>الفئة / الخصم</th><th>المستحق</th><th>المدفوع</th><th>الحالة</th><th class="noprint"></th></tr>${list.slice(0, MAX_ROWS).map(row).join('')}</table></div>
         ${list.length > MAX_ROWS ? `<p class="muted">يظهر أول ${MAX_ROWS} من ${list.length} طالبًا؛ اكتب في مربعات البحث للتضييق.</p>` : ''}`
         : empty(st.qs || st.qh || st.qp ? 'لا توجد نتائج مطابقة.' : 'لا يوجد طلاب بعد.')}`;
@@ -103,7 +108,7 @@
   function view() {
     const box = (k, l, ph) => `<label style="margin:0">${l}<input type="search" data-fq="${k}" value="${esc(st[k])}" placeholder="${ph}" autocomplete="off"></label>`;
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">تحصيل اشتراكات الطلاب</h2>
-        <button type="button" class="btn" data-fee-cfg>الفئات والخصومات</button><button type="button" class="btn" data-fee-bulk>تعيين لنتائج البحث</button>
+        ${isAdmin() ? '<button type="button" class="btn" data-fee-cfg>الفئات والخصومات</button>' : ''}${can('fees.amount') ? '<button type="button" class="btn" data-fee-bulk>تعيين لنتائج البحث</button>' : ''}
         <label style="margin:0">الشهر <select data-fmonth style="width:auto">${monthOpts(st.y, st.m).map(o => `<option value="${o.v}" ${o.sel ? 'selected' : ''}>${o.l}</option>`).join('')}</select></label></div>
       ${cloudMissing() ? '<div class="note" style="color:var(--red)">جدول الاشتراكات غير موجود على الخادم بعد: نفّذ الملف <b>supabase/fees.sql</b> في Supabase ← SQL Editor ثم حدّث الصفحة.</div>' : ''}
       <div class="three">${box('qs', 'اسم الطالب', 'اكتب جزءًا من الاسم')}${box('qh', 'الحلقة', 'بداية اسم الحلقة')}${box('qp', 'المكان', 'بداية اسم المكان')}</div>
@@ -125,7 +130,7 @@
       const amount = +v.amount;
       if (!(amount > 0)) return 'اكتب مبلغًا صحيحًا';
       const [y, m] = v.month.split('-').map(Number);
-      fees().push({ id: uid(), studentId: sid, y, m, amount, date: v.date || today(), by: me()?.name || '', note: (v.note || '').trim() });
+      fees().push({ id: uid(), studentId: sid, y, m, amount, date: v.date || today(), by: me()?.name || '', byMember: session?.id || '', note: (v.note || '').trim() });
       toast(`سُجّل ${money(amount)} جنيه لـ«${s.name}» عن ${MONTHS[m - 1]} ${y}`);
     });
   }
@@ -134,7 +139,7 @@
     const list = fees().filter(f => f.studentId === sid).sort((a, b) => (b.y * 100 + b.m) - (a.y * 100 + a.m) || String(b.date).localeCompare(String(a.date)));
     const total = list.reduce((a, f) => a + (+f.amount || 0), 0);
     openInfo('سجل اشتراكات: ' + s.name, `<div class="tbl"><table><tr><th>عن شهر</th><th>المبلغ</th><th>التاريخ</th><th>حصّلها</th><th>ملاحظة</th><th class="noprint"></th></tr>
-      ${list.map(f => `<tr><td>${MONTHS[f.m - 1]} ${f.y}</td><td>${money(f.amount)}</td><td dir="ltr" style="text-align:right">${esc(f.date || '')}</td><td>${esc(f.by || '')}</td><td>${esc(f.note || '')}</td><td class="noprint"><button type="button" class="btn sm danger" data-fee-del="${esc(f.id)}">حذف</button></td></tr>`).join('')}
+      ${list.map(f => `<tr><td>${MONTHS[f.m - 1]} ${f.y}</td><td>${money(f.amount)}</td><td dir="ltr" style="text-align:right">${esc(f.date || '')}</td><td>${esc(f.by || '')}</td><td>${esc(f.note || '')}</td><td class="noprint">${isAdmin() || (can('fees.collect') && f.byMember === session?.id) ? `<button type="button" class="btn sm danger" data-fee-del="${esc(f.id)}">حذف</button>` : ''}</td></tr>`).join('')}
       <tr class="sum"><td>الإجمالي</td><td>${money(total)}</td><td colspan="4"></td></tr></table></div>`);
   }
   function del(id) {
@@ -238,11 +243,11 @@
     const [y, m] = e.target.value.split('-').map(Number); st.y = y; st.m = m; render();
   });
   document.addEventListener('click', e => {
-    const p = e.target.closest('[data-fee-pay]'); if (p) { pay(p.dataset.feePay); return; }
+    const p = e.target.closest('[data-fee-pay]'); if (p) { if (can('fees.collect')) pay(p.dataset.feePay); return; }
     const l = e.target.closest('[data-fee-log]'); if (l) { log(l.dataset.feeLog); return; }
     const d = e.target.closest('[data-fee-del]'); if (d) { del(d.dataset.feeDel); return; }
-    const g = e.target.closest('[data-fee-assign]'); if (g) { assignDialog([byId(db.students, g.dataset.feeAssign)].filter(Boolean)); return; }
-    if (e.target.closest('[data-fee-cfg]')) { cfgDialog(); return; }
-    if (e.target.closest('[data-fee-bulk]')) assignDialog(filtered());
+    const g = e.target.closest('[data-fee-assign]'); if (g && can('fees.amount')) { assignDialog([byId(db.students, g.dataset.feeAssign)].filter(Boolean)); return; }
+    if (e.target.closest('[data-fee-cfg]')) { if (isAdmin()) cfgDialog(); return; }
+    if (e.target.closest('[data-fee-bulk]') && can('fees.amount')) assignDialog(filtered());
   });
 })();
