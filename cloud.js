@@ -147,13 +147,16 @@ function groups(db) {
   if (db.payroll) {
     add('pay_settings', 'pay_settings', ['id'], [{ id: 1, data: P.settings || {} }]);
     add('pay_employees', 'pay_employees', ['id'], (P.employees || []).map(e => ({ id: e.id, code: nz(e.code), name: e.name, role: nz(e.role), sys: nz(e.sys), status: e.status === 'متوقف' ? 'متوقف' : 'نشط', basic: num(e.basic), rate: num(e.rate), incentive: num(e.incentive), transport: num(e.transport), hours: num(e.hours), place: nz(e.place), note: nz(e.note) })));
-    add('pay_rows', 'pay_rows', ['id'], (P.rows || []).map(r => ({ id: r.id, y: +r.y, m: +r.m, emp_id: r.eid, name: nz(r.name), role: nz(r.role), base: num(r.base), extra: num(r.extra), exc: num(r.exc), abs_p: num(r.absP), abs_n: num(r.absN), mtg_p: num(r.mtgP), mtg_n: num(r.mtgN), d_test: num(r.dTest), d_rec: num(r.dRec), d_books: num(r.dBooks), basic: num(r.basic), rate: num(r.rate), incentive: num(r.incentive), transport: num(r.transport), note: r.note || '' })));
+    /* صف المرتب يُعرَّف بالموظف والشهر: لو أنشأ جهازان الشهر نفسه يُحدَّث الصف الموجود بدل رفضه */
+    add('pay_rows', 'pay_rows', ['id'], lastByKey(P.rows || [], r => r.y + '|' + r.m + '|' + r.eid).map(r => ({ id: r.id, y: +r.y, m: +r.m, emp_id: r.eid, name: nz(r.name), role: nz(r.role), base: num(r.base), extra: num(r.extra), exc: num(r.exc), abs_p: num(r.absP), abs_n: num(r.absN), mtg_p: num(r.mtgP), mtg_n: num(r.mtgN), d_test: num(r.dTest), d_rec: num(r.dRec), d_books: num(r.dBooks), basic: num(r.basic), rate: num(r.rate), incentive: num(r.incentive), transport: num(r.transport), note: r.note || '' })), 'y,m,emp_id');
     add('pay_closed', 'pay_closed', ['y', 'm'], (P.closed || []).map(k => { const [y, m] = String(k).split('-').map(Number); return { y, m }; }).filter(x => x.y && x.m));
-    add('absences', 'absences', ['id'], (P.absences || []).map(a => ({ id: a.id, y: +a.y, m: +a.m, date: a.date || null, emp_id: a.eid, name: nz(a.name), place: nz(a.place), perm: a.perm || '', reason: nz(a.reason), proof: a.proof || '', note: nz(a.note), by_member: isUuid(a.byMember) ? a.byMember : null, by_name: nz(a.by) })));
+    add('absences', 'absences', ['id'], lastByKey(P.absences || [], a => (a.date ? a.eid + '|' + a.date : a.id)).map(a => ({ id: a.id, y: +a.y, m: +a.m, date: a.date || null, emp_id: a.eid, name: nz(a.name), place: nz(a.place), perm: a.perm || '', reason: nz(a.reason), proof: a.proof || '', note: nz(a.note), by_member: isUuid(a.byMember) ? a.byMember : null, by_name: nz(a.by) })), 'emp_id,date');
   }
   return g;
 }
 const rowKey = (pk, r) => pk.map(k => r[k]).join('|');
+/* آخر نسخة لكل مفتاح طبيعي (يمنع إرسال صفين لنفس الموظف والشهر في دفعة واحدة) */
+function lastByKey(list, key) { const m = new Map(); list.forEach(x => m.set(key(x), x)); return [...m.values()]; }
 function snapshotOf(db) {
   const s = {};
   for (const gr of groups(db)) { const m = {}; gr.rows.forEach(r => { m[rowKey(gr.pk, r)] = JSON.stringify(r); }); s[gr.name] = m; }
