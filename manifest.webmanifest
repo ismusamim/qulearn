@@ -1,0 +1,15 @@
+{
+  "name": "إدارة الحلقات القرآنية",
+  "short_name": "الحلقات",
+  "description": "إدارة حلقات تحفيظ القرآن: الطلاب والمعلمون والحضور والتسميع والمرتبات",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8f5ee",
+  "theme_color": "#13294b",
+  "icons": [
+    { "src": "logo.png", "sizes": "600x600", "type": "image/png", "purpose": "any" }
+  ]
+}
