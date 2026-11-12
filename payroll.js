@@ -15,6 +15,11 @@ const IN = [
 ];
 const GROUPS = [['h', 'الساعات'], ['a', 'الغياب (ساعات / مرات)'], ['d', 'خصومات'], ['s', 'عناصر الراتب']];
 const st = { sub: 'month', y: null, m: null, am: 0, unlocked: false };
+/* نموذج غياب المعلمين (على غرار نموذج Google): حالته وفلتر القائمة */
+const REASONS = ['مرض', 'امتحانات', 'البلد', 'سفر', 'غير محدد'];
+const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const ab = { y: null, m: null, draft: {} };
+const dayName = d => { const x = new Date(String(d) + 'T00:00:00'); return isNaN(x) ? '' : DAYS[x.getDay()]; };
 const Q = () => window.QL;
 const num = v => +v || 0;
 const fmt = v => (v ? Math.round(v).toLocaleString('en-US') : '—');
@@ -112,7 +117,7 @@ const V = {
     const yr = p.absences.filter(a => a.y === st.y);
     const ids = new Set([...p.employees.filter(e => e.status !== 'متوقف').map(e => e.id), ...yr.map(a => a.eid)]);
     const bal = [...ids].map(id => { const e = emp(id) || {}; const mine = yr.filter(a => a.eid === id); const b = e.sys === '(6) أيام' ? s.lv6 : e.sys === '(3) أيام' ? s.lv3 : null; const used = mine.filter(a => a.proof === 'رصيد').length; return { e, b, used, rest: b == null ? null : b - used, proven: mine.filter(a => a.proof === 'مثبت').length, n: mine.length }; }).filter(x => x.e.name).sort((a, b) => b.n - a.n);
-    return `<div class="card"><div class="bar">${ySel()}${mSel(true)}<span class="grow"></span><button class="btn primary" data-act="payAddAbs">+ غياب</button></div>
+    return `<div class="card"><div class="bar">${ySel()}${mSel(true)}<span class="grow"></span><button class="btn primary" data-act="tab" data-v="absence">+ تسجيل غياب</button></div>
       ${list.length ? `<div class="tbl" style="max-height:420px;overflow-y:auto"><table><tr><th>التاريخ</th><th>شهر المرتب</th><th>الاسم</th><th>المكان</th><th>الإذن</th><th>السبب</th><th>الإثبات</th><th></th></tr>
       ${list.map(a => `<tr><td>${esc(a.date || '—')}</td><td>${a.m}</td><td>${esc(emp(a.eid)?.name || a.name || '')}</td><td>${esc(a.place || '')}</td><td>${esc(a.perm || '')}</td><td>${esc(a.reason || '')}</td><td>${esc(a.proof || '')}</td><td><button class="btn sm danger" data-act="payDelAbs" data-id="${esc(a.id)}">×</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد غياب مسجل في هذه الفترة.')}</div>
       <div class="card"><h2>رصيد الإجازات — ${st.y}</h2><div class="tbl"><table><tr><th>الاسم</th><th>نظام العمل</th><th>الرصيد</th><th>المخصوم</th><th>المتبقي</th><th>مثبت</th><th>إجمالي الغياب</th></tr>
@@ -139,6 +144,65 @@ function view() {
   defaults();
   const subs = [['month', 'كشف الشهر'], ['emps', 'الموظفون'], ['year', 'ملخص السنة'], ['archive', 'الأرشيف'], ['abs', 'الغياب والإجازات'], ['set', 'إعدادات المرتبات']];
   return `<div class="card noprint" style="padding:.6rem 1rem"><div class="bar" style="margin:0">${subs.map(([k, l]) => `<button class="btn ${k === st.sub ? 'on' : ''}" data-act="paySub" data-v="${k}">${l}</button>`).join('')}</div></div>${(V[st.sub] || V.month)()}`;
+}
+
+/* ============ غياب المعلمين ============ */
+/* شهر المرتب الافتراضي: آخر شهر مفتوح في المرتبات، وإلا شهر التاريخ نفسه */
+function payMonthFor(date) {
+  const p = P();
+  const open = [...new Set(p.rows.map(r => key(r.y, r.m)))].filter(k => !p.closed.includes(k)).map(k => k.split('-').map(Number)).sort((a, b) => (b[0] * 100 + b[1]) - (a[0] * 100 + a[1]))[0];
+  if (open) return { y: open[0], m: open[1] };
+  const d = new Date(String(date || Q().today()) + 'T00:00:00');
+  return { y: d.getFullYear(), m: d.getMonth() + 1 };
+}
+function absView() {
+  const { esc, empty, today } = Q(), p = P(), role = Q().session?.role, isAdmin = role === 'admin';
+  const emps = p.employees.filter(e => e.status !== 'متوقف').slice().sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const dm = payMonthFor(today());
+  if (ab.y == null) { ab.y = dm.y; ab.m = dm.m; }
+  const D = ab.draft;
+  const places = [...new Set([...Q().placeNames(), ...p.employees.map(e => e.place).filter(Boolean), ...p.absences.map(a => a.place).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'ar'));
+  const chip = (name, v, cur) => `<label class="chip-r"><input type="radio" name="${name}" value="${esc(v)}" ${cur === v ? 'checked' : ''}><span>${esc(v)}</span></label>`;
+  const form = !emps.length ? `<div class="card">${empty(isAdmin ? 'لا يوجد معلمون في سجل الموظفين. أضفهم من «المرتبات ← الموظفون».' : 'لا يوجد معلمون مسجلون بعد. تواصل مع الإدارة.')}</div>` : `
+  <div class="card absform" id="absform"><h2>تسجيل غياب معلم</h2>
+    <fieldset class="tfs"><legend>بيانات الغياب</legend>
+      <label>اسم المعلم <b class="req">*</b><select name="eid" data-pay="absEmp"><option value="">— اختر —</option>${emps.map(e => `<option value="${esc(e.id)}" ${D.eid === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label>
+      <div class="two"><label>اليوم <b class="req">*</b><input type="date" name="date" value="${esc(D.date || today())}" data-pay="absDate"></label><label>شهر المرتب<select name="pm">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === (D.pm || dm.m) ? 'selected' : ''}>شهر (${m}) ${D.py || dm.y}</option>`).join('')}</select></label></div>
+      <p class="muted daynm" style="margin:-.4rem 0 .7rem;font-size:.85rem">${esc(dayName(D.date || today()))}</p>
+      <label>مكان الحلقة <b class="req">*</b><select name="place" data-pay="absPlace"><option value="">— اختر —</option>${places.map(x => `<option ${D.place === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}<option value="__other" ${D.place === '__other' ? 'selected' : ''}>مكان آخر…</option></select></label>
+      <label data-other-place ${D.place === '__other' ? '' : 'hidden'}>اكتب المكان<input name="placeOther" value="${esc(D.placeOther || '')}"></label>
+    </fieldset>
+    <fieldset class="tfs"><legend>الإذن والسبب</legend>
+      <div class="lbl-s">الإذن</div><div class="chips">${['بإذن', 'بغير إذن'].map(v => chip('perm', v, D.perm)).join('')}<button type="button" class="btn sm" data-act="absClearPerm">مسح الاختيار</button></div>
+      <div class="lbl-s">السبب <b class="req">*</b></div><div class="chips">${[...REASONS, 'أخرى'].map(v => chip('reason', v, D.reason)).join('')}</div>
+      <label data-other-reason ${D.reason === 'أخرى' ? '' : 'hidden'}>اكتب السبب<input name="reasonOther" value="${esc(D.reasonOther || '')}"></label>
+      <label>ملاحظات <span class="muted">(اختياري)</span><textarea name="note" rows="2">${esc(D.note || '')}</textarea></label>
+      ${isAdmin ? `<label>الإثبات <span class="muted">(للإدارة)</span><select name="proof"><option value="">— لاحقًا —</option><option ${D.proof === 'رصيد' ? 'selected' : ''}>رصيد</option><option ${D.proof === 'مثبت' ? 'selected' : ''}>مثبت</option></select></label>` : ''}
+    </fieldset>
+    <div class="row"><button type="button" class="btn primary" data-act="absSubmit">تسجيل الغياب</button><button type="button" class="btn" data-act="absReset">مسح النموذج</button></div>
+  </div>`;
+  const list = p.absences.filter(a => a.y === ab.y && a.m === ab.m).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.ts || '').localeCompare(String(a.ts || '')));
+  const myName = Q().me()?.name;
+  const by = new Map();
+  list.forEach(a => { const k = a.eid; if (!by.has(k)) by.set(k, { name: emp(k)?.name || a.name, n: 0, p: 0, np: 0 }); const o = by.get(k); o.n++; if (a.perm === 'بإذن') o.p++; if (a.perm === 'بغير إذن') o.np++; });
+  const sum = [...by.values()].sort((a, b) => b.n - a.n);
+  const ys = [...new Set([ab.y, ...p.absences.map(a => a.y), new Date().getFullYear()])].sort((a, b) => b - a);
+  return `<div class="abs-grid">${form}
+  <div class="card"><div class="bar"><h2 class="grow" style="margin:0">سجل الغياب</h2>
+    <select data-pay="abY">${ys.map(y => `<option ${y === ab.y ? 'selected' : ''}>${y}</option>`).join('')}</select>
+    <select data-pay="abM">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === ab.m ? 'selected' : ''}>شهر (${m})</option>`).join('')}</select>
+    <span class="tag">${list.length} يوم</span></div>
+    ${list.length ? `<div class="tbl" style="max-height:520px;overflow-y:auto"><table><tr><th>اليوم</th><th>المعلم</th><th>المكان</th><th>الإذن</th><th>السبب</th>${isAdmin ? '<th>الإثبات</th>' : ''}<th>ملاحظات</th><th></th></tr>
+    ${list.map(a => `<tr><td><b>${esc(dayName(a.date))}</b><br><small class="muted" dir="ltr">${esc(a.date || '—')}</small></td><td>${esc(emp(a.eid)?.name || a.name || '')}</td><td>${esc(a.place || '—')}</td><td>${a.perm ? `<span class="tag ${a.perm === 'بإذن' ? 'tag-ok' : 'tag-no'}">${esc(a.perm)}</span>` : '—'}</td><td>${esc(a.reason || '—')}</td>${isAdmin ? `<td><select class="mini" data-pay="absProof" data-id="${esc(a.id)}"><option value="">—</option><option ${a.proof === 'رصيد' ? 'selected' : ''}>رصيد</option><option ${a.proof === 'مثبت' ? 'selected' : ''}>مثبت</option></select></td>` : ''}<td>${esc(a.note || '')}${a.by ? `<br><small class="muted">سجّله: ${esc(a.by)}</small>` : ''}</td><td>${isAdmin || (a.by && a.by === myName) ? `<button class="btn sm danger" data-act="payDelAbs" data-id="${esc(a.id)}">×</button>` : ''}</td></tr>`).join('')}</table></div>` : empty('لا يوجد غياب مسجل في هذا الشهر.')}
+    ${sum.length ? `<h3 class="sc-h">ملخص الشهر</h3><div class="tbl"><table><tr><th>المعلم</th><th>أيام الغياب</th><th>بإذن</th><th>بغير إذن</th></tr>${sum.map(o => `<tr><td>${esc(o.name)}</td><td class="net">${o.n}</td><td>${o.p}</td><td>${o.np}</td></tr>`).join('')}</table></div>` : ''}
+  </div></div>`;
+}
+/* قراءة حقول النموذج إلى المسودة حتى لا تضيع عند إعادة الرسم */
+function absRead() {
+  const f = document.getElementById('absform'); if (!f) return ab.draft;
+  const v = n => (f.querySelector(`[name=${n}]`)?.value ?? '').trim(), r = n => f.querySelector(`[name=${n}]:checked`)?.value || '';
+  ab.draft = { eid: v('eid'), date: v('date'), pm: +v('pm') || null, place: v('place'), placeOther: v('placeOther'), perm: r('perm'), reason: r('reason'), reasonOther: v('reasonOther'), note: v('note'), proof: v('proof') };
+  return ab.draft;
 }
 
 /* ============ الإجراءات ============ */
@@ -215,6 +279,24 @@ const act = {
       { name: 'note', label: 'ملاحظات', type: 'textarea' }
     ], v => { const e = emp(v.eid); if (!e) return 'اختر الموظف'; p.absences.push({ id: uid(), y: st.y, m: +v.m, date: v.date, eid: e.id, name: e.name, place: v.place.trim(), perm: v.perm, reason: v.reason.trim(), proof: v.proof, note: v.note.trim() }); });
   },
+  absSubmit: () => {
+    const D = absRead(), p = P(), { toast, uid, today } = Q();
+    const e = emp(D.eid);
+    if (!e) { toast('اختر اسم المعلم'); return; }
+    if (!D.date) { toast('حدّد اليوم'); return; }
+    const place = D.place === '__other' ? D.placeOther : D.place;
+    if (!place) { toast('اختر مكان الحلقة'); return; }
+    const reason = D.reason === 'أخرى' ? D.reasonOther : D.reason;
+    if (!reason) { toast(D.reason === 'أخرى' ? 'اكتب السبب' : 'اختر السبب'); return; }
+    if (p.absences.some(a => a.eid === e.id && a.date === D.date)) { toast('غياب هذا المعلم في هذا اليوم مسجّل بالفعل'); return; }
+    const pmY = payMonthFor(today()).y;
+    p.absences.push({ id: uid(), y: pmY, m: D.pm || payMonthFor(D.date).m, date: D.date, eid: e.id, name: e.name, place, perm: D.perm, reason, proof: Q().session?.role === 'admin' ? D.proof : '', note: D.note, ts: new Date().toISOString(), by: Q().me()?.name || '' });
+    ab.draft = { date: D.date, pm: D.pm, place: D.place, placeOther: D.placeOther };
+    ab.y = pmY; ab.m = D.pm || ab.m;
+    Q().save(); Q().render(); toast('تم تسجيل غياب ' + e.name);
+  },
+  absReset: () => { ab.draft = {}; Q().render(); },
+  absClearPerm: () => { document.querySelectorAll('#absform [name=perm]').forEach(x => { x.checked = false; }); absRead(); },
   payDelAbs: d => Q().ask('حذف سجل الغياب؟', () => { const p = P(); p.absences = p.absences.filter(a => a.id !== d.id); Q().save(); Q().render(); }),
   paySet: () => {
     const s = P().settings, L = { perm: 'خصم ساعة الغياب بإذن', noperm: 'خصم ساعة الغياب بدون إذن', mperm: 'خصم غياب الاجتماع بإذن (للمرة)', mnoperm: 'خصم غياب الاجتماع بغير إذن (للمرة)', round: 'تقريب الراتب لأقرب', lv3: 'رصيد إجازات نظام (3) أيام', lv6: 'رصيد إجازات نظام (6) أيام', hours: 'الساعات الأساسية الافتراضية' };
@@ -249,6 +331,12 @@ function onChange(e) {
   if (k === 'y') { st.y = +el.value; Q().render(); return; }
   if (k === 'm') { st.m = +el.value; Q().render(); return; }
   if (k === 'am') { st.am = +el.value; Q().render(); return; }
+  if (k === 'abY') { absRead(); ab.y = +el.value; Q().render(); return; }
+  if (k === 'abM') { absRead(); ab.m = +el.value; Q().render(); return; }
+  if (k === 'absProof') { const a = P().absences.find(x => x.id === el.dataset.id); if (a) { a.proof = el.value; Q().save(); Q().toast('تم حفظ الإثبات'); } return; }
+  if (k === 'absEmp') { absRead(); const e = emp(el.value), f = document.getElementById('absform'); if (e?.place && f) { const s = f.querySelector('[name=place]'); if ([...s.options].some(o => o.value === e.place)) { s.value = e.place; absRead(); } } return; }
+  if (k === 'absPlace') { absRead(); const f = document.getElementById('absform'); f.querySelector('[data-other-place]').hidden = el.value !== '__other'; return; }
+  if (k === 'absDate') { absRead(); const f = document.getElementById('absform'); f.querySelector('.daynm').textContent = dayName(el.value); return; }
   if (k === 'import') {
     const f = el.files[0]; el.value = ''; if (!f) return;
     const rd = new FileReader();
@@ -264,5 +352,10 @@ function onChange(e) {
     rd.readAsText(f);
   }
 }
-window.Payroll = { view, act, onInput, onChange, calc };
+/* إظهار خانة «أخرى» للسبب فور اختياره */
+document.addEventListener('change', e => {
+  if (e.target.name === 'reason' && e.target.closest('#absform')) { absRead(); document.querySelector('#absform [data-other-reason]').hidden = e.target.value !== 'أخرى'; }
+  else if (e.target.name === 'perm' && e.target.closest('#absform')) absRead();
+});
+window.Payroll = { view, absView, act, onInput, onChange, calc };
 })();
