@@ -444,3 +444,29 @@ th.selc,td.selc{width:2.2rem;text-align:center}
   #printzone thead{display:table-header-group}
   #printzone tr{break-inside:avoid}
 }
+
+
+/* ===== تثبيت رأس الجدول وأعمدة المسلسل والاسم ===== */
+main .tbl{max-height:calc(100vh - 170px);overflow:auto}
+table.frz{border-collapse:separate;border-spacing:0}
+table.frz th,table.frz td{border-width:0 0 1px 1px}
+table.frz tr:first-child th{border-bottom-width:1px;border-top-width:0}
+table.frz .stk-h{position:sticky;z-index:3;background:color-mix(in srgb,var(--navy-l) 92%,#fff)}
+table.frz .stk-hl{border-bottom:2.5px solid var(--navy)}
+table.frz .stk-c{position:sticky;z-index:2;background:#fff;box-shadow:-1px 0 0 color-mix(in srgb,var(--navy) 16%,transparent)}
+table.frz tr:nth-child(odd):not(:first-child):not(.sum) td.stk-c{background:color-mix(in srgb,var(--stripe) 85%,#fff)}
+table.frz tr.sum td.stk-c{background:var(--gold-l)}
+table.frz .stk-h.stk-c{z-index:4}
+@media print{main .tbl{max-height:none;overflow:visible}table.frz .stk-h,table.frz .stk-c{position:static;box-shadow:none}}
+
+/* ===== زر الطباعة: أيقونة على اليسار ===== */
+.btn.icon-only{display:inline-flex;align-items:center;justify-content:center;width:38px;height:36px;padding:0}
+.btn.icon-only svg{width:20px;height:20px}
+.print-left{margin-inline-start:auto}
+.tblprint .btn{width:34px;height:32px;padding:0;justify-content:center}
+.tblprint .btn svg{width:18px;height:18px}
+
+/* ===== الأزرار البيضاء: إطار بلون الموقع ===== */
+main .btn:not(.primary):not(.on):not(.danger),.modal .btn:not(.primary):not(.on):not(.danger),.mode:not(.on){border-color:color-mix(in srgb,var(--navy) 42%,transparent)}
+main .btn.danger,.modal .btn.danger{border-color:color-mix(in srgb,var(--red) 55%,transparent)}
+
