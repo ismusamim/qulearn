@@ -150,6 +150,7 @@ function view() {
 /* شهر المرتب الافتراضي: آخر شهر مفتوح في المرتبات، وإلا شهر التاريخ نفسه */
 function payMonthFor(date) {
   const p = P();
+  if (!p.rows.length && p.curMonth?.y) return { y: p.curMonth.y, m: p.curMonth.m };
   const open = [...new Set(p.rows.map(r => key(r.y, r.m)))].filter(k => !p.closed.includes(k)).map(k => k.split('-').map(Number)).sort((a, b) => (b[0] * 100 + b[1]) - (a[0] * 100 + a[1]))[0];
   if (open) return { y: open[0], m: open[1] };
   const d = new Date(String(date || Q().today()) + 'T00:00:00');
@@ -182,7 +183,7 @@ function absView() {
     <div class="row"><button type="button" class="btn primary" data-act="absSubmit">تسجيل الغياب</button><button type="button" class="btn" data-act="absReset">مسح النموذج</button></div>
   </div>`;
   const list = p.absences.filter(a => a.y === ab.y && a.m === ab.m).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.ts || '').localeCompare(String(a.ts || '')));
-  const myName = Q().me()?.name;
+  const myName = Q().me()?.name, myId = Q().session?.id;
   const by = new Map();
   list.forEach(a => { const k = a.eid; if (!by.has(k)) by.set(k, { name: emp(k)?.name || a.name, n: 0, p: 0, np: 0 }); const o = by.get(k); o.n++; if (a.perm === 'بإذن') o.p++; if (a.perm === 'بغير إذن') o.np++; });
   const sum = [...by.values()].sort((a, b) => b.n - a.n);
@@ -193,7 +194,7 @@ function absView() {
     <select data-pay="abM">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === ab.m ? 'selected' : ''}>شهر (${m})</option>`).join('')}</select>
     <span class="tag">${list.length} يوم</span></div>
     ${list.length ? `<div class="tbl" style="max-height:520px;overflow-y:auto"><table><tr><th>اليوم</th><th>المعلم</th><th>المكان</th><th>الإذن</th><th>السبب</th>${isAdmin ? '<th>الإثبات</th>' : ''}<th>ملاحظات</th><th></th></tr>
-    ${list.map(a => `<tr><td><b>${esc(dayName(a.date))}</b><br><small class="muted" dir="ltr">${esc(a.date || '—')}</small></td><td>${esc(emp(a.eid)?.name || a.name || '')}</td><td>${esc(a.place || '—')}</td><td>${a.perm ? `<span class="tag ${a.perm === 'بإذن' ? 'tag-ok' : 'tag-no'}">${esc(a.perm)}</span>` : '—'}</td><td>${esc(a.reason || '—')}</td>${isAdmin ? `<td><select class="mini" data-pay="absProof" data-id="${esc(a.id)}"><option value="">—</option><option ${a.proof === 'رصيد' ? 'selected' : ''}>رصيد</option><option ${a.proof === 'مثبت' ? 'selected' : ''}>مثبت</option></select></td>` : ''}<td>${esc(a.note || '')}${a.by ? `<br><small class="muted">سجّله: ${esc(a.by)}</small>` : ''}</td><td>${isAdmin || (a.by && a.by === myName) ? `<button class="btn sm danger" data-act="payDelAbs" data-id="${esc(a.id)}">×</button>` : ''}</td></tr>`).join('')}</table></div>` : empty('لا يوجد غياب مسجل في هذا الشهر.')}
+    ${list.map(a => `<tr><td><b>${esc(dayName(a.date))}</b><br><small class="muted" dir="ltr">${esc(a.date || '—')}</small></td><td>${esc(emp(a.eid)?.name || a.name || '')}</td><td>${esc(a.place || '—')}</td><td>${a.perm ? `<span class="tag ${a.perm === 'بإذن' ? 'tag-ok' : 'tag-no'}">${esc(a.perm)}</span>` : '—'}</td><td>${esc(a.reason || '—')}</td>${isAdmin ? `<td><select class="mini" data-pay="absProof" data-id="${esc(a.id)}"><option value="">—</option><option ${a.proof === 'رصيد' ? 'selected' : ''}>رصيد</option><option ${a.proof === 'مثبت' ? 'selected' : ''}>مثبت</option></select></td>` : ''}<td>${esc(a.note || '')}${a.by ? `<br><small class="muted">سجّله: ${esc(a.by)}</small>` : ''}</td><td>${isAdmin || (a.byMember ? a.byMember === myId : a.by && a.by === myName) ? `<button class="btn sm danger" data-act="payDelAbs" data-id="${esc(a.id)}">×</button>` : ''}</td></tr>`).join('')}</table></div>` : empty('لا يوجد غياب مسجل في هذا الشهر.')}
     ${sum.length ? `<h3 class="sc-h">ملخص الشهر</h3><div class="tbl"><table><tr><th>المعلم</th><th>أيام الغياب</th><th>بإذن</th><th>بغير إذن</th></tr>${sum.map(o => `<tr><td>${esc(o.name)}</td><td class="net">${o.n}</td><td>${o.p}</td><td>${o.np}</td></tr>`).join('')}</table></div>` : ''}
   </div></div>`;
 }
@@ -290,7 +291,7 @@ const act = {
     if (!reason) { toast(D.reason === 'أخرى' ? 'اكتب السبب' : 'اختر السبب'); return; }
     if (p.absences.some(a => a.eid === e.id && a.date === D.date)) { toast('غياب هذا المعلم في هذا اليوم مسجّل بالفعل'); return; }
     const pmY = payMonthFor(today()).y;
-    p.absences.push({ id: uid(), y: pmY, m: D.pm || payMonthFor(D.date).m, date: D.date, eid: e.id, name: e.name, place, perm: D.perm, reason, proof: Q().session?.role === 'admin' ? D.proof : '', note: D.note, ts: new Date().toISOString(), by: Q().me()?.name || '' });
+    p.absences.push({ id: uid(), y: pmY, m: D.pm || payMonthFor(D.date).m, date: D.date, eid: e.id, name: e.name, place, perm: D.perm, reason, proof: Q().session?.role === 'admin' ? D.proof : '', note: D.note, ts: new Date().toISOString(), by: Q().me()?.name || '', byMember: Q().session?.id || '' });
     ab.draft = { date: D.date, pm: D.pm, place: D.place, placeOther: D.placeOther };
     ab.y = pmY; ab.m = D.pm || ab.m;
     Q().save(); Q().render(); toast('تم تسجيل غياب ' + e.name);
