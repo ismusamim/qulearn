@@ -1,5 +1,8 @@
-(() => {
 'use strict';
+/* ملفات التطبيق ثلاثة تُحمَّل بالترتيب ويتشارك بعضها تعريفات بعض:
+   app.js (الأساس والواجهات) ← app-forms.js (الاستيراد والنماذج) ← app-actions.js (الإجراءات والمزامنة والتشغيل) */
+/* وضع قاعدة البيانات: يعمل تلقائيًا عند وجود cloud.js مضبوطًا، وإلا يبقى التطبيق محليًا كما كان */
+const CLOUD = !!(window.Cloud && window.Cloud.enabled);
 const ss={get:k=>{try{return sessionStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{sessionStorage.setItem(k,v)}catch(e){}},del:k=>{try{sessionStorage.removeItem(k)}catch(e){}}};
 
 /* ============ ثوابت ============ */
@@ -57,11 +60,12 @@ const genPass = () => {
   try { crypto.getRandomValues(a); } catch (e) { a[0] = Math.floor(Math.random() * 4294967296); }
   return String(100000 + a[0] % 900000);
 };
+const pinField = v => (CLOUD ? [] : [{ name: 'pin', label: 'كلمة المرور', value: v, required: true }]);
 const pv = (t, g, k) => k === 'phone' ? (t.phone || '') : ((t[g] || {})[k] || '');
 
 /* ============ أدوات ============ */
 const $app = document.getElementById('app');
-const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+const uid = () => (window.Cloud ? window.Cloud.uuid() : (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4)));
 const pad = n => String(n).padStart(2, '0');
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -92,7 +96,9 @@ function seed() {
 /* ترقية البيانات القديمة: الإداري صار حسابًا باسم، وأُضيف المشرفون */
 function migrate(d) {
   d.settings = d.settings || { org: 'إدارة الحلقات القرآنية' };
-  if (!Array.isArray(d.admins) || !d.admins.length) d.admins = [{ id: uid(), name: 'المدير', pin: d.settings.adminPin || '1234' }];
+  if (!Array.isArray(d.admins)) d.admins = [];
+  if (!CLOUD && !d.admins.length) d.admins = [{ id: uid(), name: 'المدير', pin: d.settings.adminPin || '1234' }];
+  ['teachers', 'students', 'halaqat', 'attendance', 'records', 'news'].forEach(k => { if (!Array.isArray(d[k])) d[k] = []; });
   if (!Array.isArray(d.supervisors)) d.supervisors = [];
   /* حقول يضيفها الإداري من الاستيراد، وأعمدة مستوردة تنتظر الاعتماد */
   if (!d.fields || typeof d.fields !== 'object') d.fields = {};
@@ -125,9 +131,17 @@ function load() {
   try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) { /* ignore */ }
   return d;
 }
-let db = load();
+let db = CLOUD ? migrate(window.Cloud.cached() || { ...window.Cloud.emptyDb(), settings: { ...window.Cloud.emptyDb().settings, ...(JSON.parse(localStorage.getItem('qcloud_public') || '{}') || {}) } }) : load();
 const validBackup = d => !!d && !!d.settings && ['teachers', 'halaqat', 'students', 'attendance', 'records', 'news'].every(k => Array.isArray(d[k]));
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('تعذّر حفظ البيانات في المتصفح'); } };
+const save = () => {
+  if (CLOUD) {
+    /* النسخة المحلية تُحفظ فورًا، والفروق تُرسل للخادم بعد لحظة (أو عند عودة الاتصال) */
+    if (window.Cloud.signedIn) { window.Cloud.ensureUuids(db); window.Cloud.saveLocal(db); window.Cloud.schedule(db); }
+    setTimeout(() => window.netPill?.(), 0);
+    return;
+  }
+  try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('تعذّر حفظ البيانات في المتصفح'); }
+};
 
 /* ============ المظهر: الألوان والشعار ============ */
 const THEME0 = { navy: '#13294b', gold: '#b8904f', leaf: '#4e7d45', bg: '#f8f5ee', text: '#1a2333', red: '#b3372f', amber: '#b7791f' };
@@ -207,7 +221,7 @@ function paletteFrom(img) {
 }
 
 let session = null;
-try { session = JSON.parse(ss.get(SKEY) || 'null'); } catch (e) { /* ignore */ }
+try { session = CLOUD ? (window.Cloud.signedIn ? window.Cloud.auth.member || null : null) : JSON.parse(ss.get(SKEY) || 'null'); } catch (e) { /* ignore */ }
 /* تفضيلات الواجهة لهذا الجهاز: اتساع الشريط الجانبي وطيّه */
 const UIKEY = 'halaqat_ui', SIDE_W = 250, SIDE_MIN = 180, SIDE_MAX = 420;
 let uiPref = {};
@@ -261,7 +275,11 @@ const myHalaqat = () => db.halaqat.filter(h => (session.role === 'supervisor' ? 
 const accounts = () => ROLES.flatMap(r => db[COLL[r]].map(u => ({ role: r, u })));
 const me = () => session && byId(db[COLL[session.role]] || [], session.id);
 /* حسابات أخرى بنفس اسم المستخدم الحالي (لتبديل الوضع) */
-const sameName = () => { const m = me(); return m ? accounts().filter(a => norm(a.u.name) === norm(m.name) && !(a.role === session.role && a.u.id === m.id)) : []; };
+const sameName = () => {
+  const m = me(); if (!m) return [];
+  if (CLOUD) return m.userId ? accounts().filter(a => a.u.userId === m.userId && !(a.role === session.role && a.u.id === m.id)) : [];
+  return accounts().filter(a => norm(a.u.name) === norm(m.name) && !(a.role === session.role && a.u.id === m.id));
+};
 const recsOf = sid => db.records.filter(r => r.studentId === sid).slice().reverse().sort((a, b) => b.date.localeCompare(a.date));
 const recLine = r => `${r.type} — سورة ${SURAHS[r.surah - 1][0]} (${r.from}–${r.to})`;
 function lastHifz(sid) {
@@ -366,7 +384,7 @@ function loginView() {
     <button type="button" class="btn primary" style="width:100%" data-act="doLogin">دخول</button>
     ${none ? '<p class="muted" style="margin-bottom:0">لا توجد حسابات بعد.</p>' : ''}
   </div></div>
-  <p class="muted" style="font-size:.8rem;text-align:center">النسخة التجريبية: «المدير» 1234 — «الشيخ أحمد» و«المشرف خالد» والطلاب 0000 (غيّرها من لوحة الإدارة).</p></div>`;
+  ${CLOUD ? '' : `<p class="muted" style="font-size:.8rem;text-align:center">النسخة التجريبية: «المدير» 1234 — «الشيخ أحمد» و«المشرف خالد» والطلاب 0000 (غيّرها من لوحة الإدارة).</p>`}</div>`;
 }
 
 /* ===== بحث الاسم في صفحة الدخول (كل الحسابات في قائمة واحدة) ===== */
@@ -382,6 +400,7 @@ function loginMatches() {
   const q = norm(document.getElementById('ufilter')?.value);
   /* لا تظهر القائمة إلا بعد كتابة حرف واحد على الأقل */
   if (!q) return [];
+  if (CLOUD) return ui.cloudGroups || [];
   /* الأسماء التي تبدأ بالحروف المكتوبة أولًا، ثم التي تبدأ بها إحدى كلماتها، ثم الباقي */
   const rank = k => k.startsWith(q) ? 0 : k.split(' ').some(w => w.startsWith(q)) ? 1 : 2;
   return nameGroups().filter(g => g.key.includes(q)).sort((x, y) => rank(x.key) - rank(y.key));
@@ -391,14 +410,17 @@ function showResults(open = true) {
   if (!box) return;
   if (!open || !norm(document.getElementById('ufilter')?.value)) { box.hidden = true; return; }
   const list = loginMatches();
+  const none = CLOUD && norm(document.getElementById('ufilter')?.value).length < 2 ? 'اكتب حرفين على الأقل' : CLOUD && ui.lookupBusy ? 'جارٍ البحث…' : (CLOUD && ui.lookupErr) || 'لا توجد نتائج مطابقة';
   box.innerHTML = list.length
     ? list.map(g => `<button type="button" class="opt" data-pick="${esc(g.key)}">${esc(g.name)}</button>`).join('')
-    : '<div class="muted" style="padding:.6rem .8rem">لا توجد نتائج مطابقة</div>';
+    : `<div class="muted" style="padding:.6rem .8rem">${esc(none)}</div>`;
   box.hidden = false;
 }
 /* المربعات الخاصة بكل وضع (للقراءة فقط، للتأكد من الهوية) */
 function acctInfo(a) {
   const box = (l, v) => `<div class="info"><small>${l}</small><b>${esc(v)}</b></div>`;
+  /* قبل الدخول لا نعرض حلقة الطالب ولا مكانه، حمايةً لبيانات الأطفال */
+  if (CLOUD) return box('نوع الحساب', ROLE_L[a.role]) + box('المؤسسة', db.settings.org);
   if (a.role === 'student') { const h = byId(db.halaqat, a.u.halaqaId); return box('الحلقة', h ? halaqaLabel(h) : 'غير محدد') + box('المكان', placeName(h) || 'غير محدد'); }
   if (a.role === 'teacher' || a.role === 'supervisor') {
     const hs = db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id);
@@ -407,7 +429,7 @@ function acctInfo(a) {
   return box('الصلاحيات', 'إدارة كاملة') + box('المؤسسة', db.settings.org);
 }
 function modeLabel(a, list) {
-  if (list.filter(x => x.role === a.role).length < 2) return ROLE_L[a.role];
+  if (CLOUD || list.filter(x => x.role === a.role).length < 2) return ROLE_L[a.role];
   const extra = a.role === 'student' ? hName(a.u.halaqaId) : a.role === 'admin' ? '' : db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id).map(halaqaLabel).join('، ');
   return ROLE_L[a.role] + (extra && extra !== '—' ? ' – ' + extra : '');
 }
@@ -432,7 +454,13 @@ function pickUser(g) {
 /* ============ الهيكل العام ============ */
 function render() {
   if (session) {
-    if (!me()) { session = null; ss.del(SKEY); }
+    if (!me()) {
+      if (CLOUD && window.Cloud.signedIn) {
+        $app.innerHTML = `<div class="login"><div class="card" style="text-align:center"><h2>جارٍ تحميل البيانات…</h2><p class="muted">${navigator.onLine === false ? 'لا يوجد اتصال بالإنترنت ولا نسخة محفوظة على هذا الجهاز بعد.' : 'لحظات من فضلك.'}</p><button class="btn" data-act="logout">خروج</button></div></div>`;
+        return;
+      }
+      session = null; ss.del(SKEY);
+    }
   }
   if (!session) { $app.innerHTML = loginView(); return; }
   const role = session.role, tabs = TABS[role];
@@ -484,12 +512,12 @@ const adminViews = {
     const one = KIND_ONE[kind];
     const others = m => accounts().filter(a => norm(a.u.name) === norm(m.name) && a.u.id !== m.id).map(a => ROLE_L[a.role]);
     const rows = db[kind].map((m, i) => { const o = others(m); return `<tr><td>${i + 1}</td><td>${esc(m.name)}${o.length ? ` <span class="tag" title="نفس الاسم له حساب آخر">+ ${esc(o.join('، '))}</span>` : ''}</td>
-      <td><code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button></td>
-      <td><button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button><button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="delMember" data-id="${m.id}" data-k="${kind}">حذف</button></td></tr>`; }).join('');
+      <td>${CLOUD ? (m.hasLogin ? '<span class="tag tag-ok">له حساب دخول</span>' : '<span class="tag">بلا حساب</span>') : `<code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button>`}</td>
+      <td>${CLOUD ? `<button class="btn sm" data-act="cloudPw" data-id="${m.id}" data-k="${kind}">${m.hasLogin ? 'كلمة جديدة' : 'إنشاء حساب'}</button>` : `<button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button>`}<button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="delMember" data-id="${m.id}" data-k="${kind}">حذف</button></td></tr>`; }).join('');
     const tip = kind === 'supervisors' ? 'حدّد حلقات كل مشرف من تبويب «الحلقات» ← تعديل ← المشرف.' : 'عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل باسمه وكلمة مروره من صفحة الدخول.';
-    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
-    <div class="note">${tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
-    ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>كلمة المرور</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
+    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
+    <div class="note">${CLOUD ? 'كلمات المرور محفوظة على الخادم ولا يمكن عرضها؛ تظهر مرة واحدة عند إنشاء الحساب أو تغييرها، فسلّمها لأصحابها.' : tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
+    ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>${CLOUD ? 'حساب الدخول' : 'كلمة المرور'}</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
   pending() {
     const kindL = { students: 'الطلاب', teachers: 'المعلمون' };
@@ -515,7 +543,7 @@ const adminViews = {
   halaqat() {
     const studentsIn = list => db.students.filter(st => list.some(h => h.id === st.halaqaId)).length;
     const table = list => `<div class="tbl"><table><tr><th>الحلقة</th><th>المشرف</th><th>الوقت</th><th>الطلاب</th><th></th></tr>${list.map(h => `<tr><td><b>${esc(halaqaLabel(h))}</b>${h.teacherId ? '' : ' <span class="tag">بلا معلم</span>'}</td><td>${esc(supName(h.supervisorId))}</td><td>${esc(timeText(h) || '—')}</td><td>${db.students.filter(st => st.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>`;
-    const card = (pl, list) => `<div class="card place"><div class="bar"><span class="pico">${pl ? (pl.type === 'دار تحفيظ' ? TAB_ICONS.house : TAB_ICONS.mosque) : TAB_ICONS.halaqat}</span><h2 class="grow" style="margin:0">${esc(pl ? pl.name : 'حلقات لم يُحدَّد مكانها')} ${pl ? `<span class="tag">${esc(pl.type)}</span>` : ''}</h2><span class="muted">${list.length} حلقة · ${studentsIn(list)} طالب</span>
+    const card = (pl, list) => `<div class="card place"><div class="bar"><span class="pico">${pl ? (pl.type === 'دار تحفيظ' ? TAB_ICONS.house : TAB_ICONS.mosque) : TAB_ICONS.halaqat}</span><h2 class="grow" style="margin:0">${esc(pl ? pl.name : 'حلقات لم يُحدَّد مكانها')} ${pl ? `<span class="tag">${esc(pl.type)}</span>` : ''}</h2><span class="muted">${list.length} حلقة · ${studentsIn(list)} طالب</span>
       ${pl ? `<button class="btn sm primary" data-act="addHalaqa" data-p="${pl.id}">+ حلقة هنا</button><button class="btn sm" data-act="editPlace" data-id="${pl.id}">تعديل المكان</button><button class="btn sm danger" data-act="delPlace" data-id="${pl.id}">حذف</button>` : ''}</div>
       ${pl?.address ? `<p class="muted" style="margin:-.3rem 0 .7rem">${esc(pl.address)}</p>` : ''}
       ${list.length ? table(list) : empty('لا توجد حلقات في هذا المكان بعد.')}</div>`;
@@ -548,20 +576,21 @@ const adminViews = {
       <div class="logo-edit"><img class="logo-prev" src="${logoSrc()}" alt="الشعار الحالي">
         <div class="bar"><label class="btn sm primary" style="margin:0">رفع شعار جديد<input type="file" accept="image/*" data-change="logo" hidden></label>${db.settings.logo ? '<button class="btn sm" data-act="logoReset">الشعار الافتراضي</button>' : ''}</div>
         <button class="btn sm" style="width:100%" data-act="themeFromLogo">استخراج الألوان من الشعار</button>
-        <p class="muted" style="font-size:.78rem;margin:.5rem 0 0">PNG أو SVG بخلفية شفافة يعطي أفضل نتيجة. يُصغَّر تلقائيًا ويظهر في الشاشة الافتتاحية وصفحة الدخول والشريط العلوي.</p>
+        <p class="muted" style="font-size:.78rem;margin:.5rem 0 0">PNG أو SVG بخلفية شفافة يعطي أفضل نتيجة. يُصغَّر تلقائيًا ويظهر في الشاشة الافتتاحية وصفحة الدخول والشريط العلوي.</p>
       </div>
       <div><div class="swatches">${sw}</div>
         <h3 style="font-size:.95rem;margin:1rem 0 .5rem">أنماط جاهزة</h3><div class="presets">${pre}</div>
         <div class="row" style="margin-top:1rem"><button class="btn danger" data-act="themeReset">استعادة المظهر الافتراضي</button></div>
       </div>
     </div></div>
+    ${CLOUD ? cloudCard() : ''}
     <div class="card"><h2>الإعدادات</h2>
-    <div class="note">البيانات تُحفظ في متصفح هذا الجهاز فقط (localStorage). خذ نسخة احتياطية بانتظام، ولا تعتمد على الرموز السرية لحماية بيانات حساسة.</div>
+    <div class="note">${CLOUD ? 'البيانات محفوظة في قاعدة البيانات ومتزامنة بين الأجهزة، مع نسخة على هذا الجهاز للعمل بدون إنترنت. النسخة الاحتياطية مفيدة للأرشفة.' : 'البيانات تُحفظ في متصفح هذا الجهاز فقط (localStorage). خذ نسخة احتياطية بانتظام، ولا تعتمد على الرموز السرية لحماية بيانات حساسة.'}</div>
     <div class="bar"><button class="btn" data-act="editSettings">اسم المؤسسة</button>
     <button class="btn" data-act="export">تصدير نسخة احتياطية</button>
-    <label class="btn" style="margin:0">استيراد نسخة<input type="file" accept="application/json" data-change="import" hidden></label>
+    ${CLOUD ? '' : `<label class="btn" style="margin:0">استيراد نسخة<input type="file" accept="application/json" data-change="import" hidden></label>
     <button class="btn" data-act="pasteBackup">لصق نسخة</button>
-    <button class="btn danger" data-act="reset">مسح كل البيانات</button></div></div>`;
+    <button class="btn danger" data-act="reset">مسح كل البيانات</button>`}</div></div>`;
   }
 };
 
@@ -621,758 +650,3 @@ adminViews.absence = absenceView;
 const supervisorViews = { att: teacherViews.att, mine: teacherViews.mine, absence: absenceView, news: () => newsView('supervisor') };
 const VIEWS = { admin: adminViews, teacher: teacherViews, supervisor: supervisorViews, student: studentViews };
 
-/* ============ الاستيراد من Excel / CSV / Google Sheets ============ */
-const HDR = {
-  name: ['الاسم', 'اسم', 'اسم الطالب', 'اسم المعلم', 'name', 'full name'],
-  halaqa: ['الحلقة', 'حلقة', 'حلقة المعلم', 'المعلم', 'halaqa', 'group', 'class'],
-  phone: ['الجوال', 'جوال', 'رقم الجوال', 'الهاتف', 'هاتف', 'رقم الهاتف', 'phone', 'mobile', 'tel'],
-  pin: ['كلمة المرور', 'الرمز', 'الرمز السري', 'pin', 'password']
-};
-const hkey = s => norm(s).replace(/[\s_\-:.]/g, '');
-
-function decodeText(buf) {
-  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-  catch (e) { return new TextDecoder('windows-1256').decode(buf); }
-}
-function parseCSV(text) {
-  text = String(text).replace(/^\uFEFF/, '');
-  const first = text.split(/\r?\n/)[0] || '';
-  const delim = ['\t', ';', ','].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
-  const rows = []; let row = [], cur = '', q = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
-    else if (ch === '"') q = true;
-    else if (ch === delim) { row.push(cur); cur = ''; }
-    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cur); cur = ''; rows.push(row); row = []; }
-    else cur += ch;
-  }
-  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
-  return rows;
-}
-
-/* قارئ xlsx بلا مكتبات: ملف xlsx هو أرشيف zip من ملفات XML */
-async function unzip(buf) {
-  const u8 = new Uint8Array(buf), dv = new DataView(buf), dec = new TextDecoder();
-  let e = -1;
-  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
-  if (e < 0) throw new Error('zip');
-  const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true);
-  const files = {};
-  for (let k = 0; k < n; k++) {
-    if (dv.getUint32(p, true) !== 0x02014b50) break;
-    const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
-    files[dec.decode(u8.subarray(p + 46, p + 46 + nl))] = { method: dv.getUint16(p + 10, true), size: dv.getUint32(p + 20, true), off: dv.getUint32(p + 42, true) };
-    p += 46 + nl + el + cl;
-  }
-  return async name => {
-    const f = files[name]; if (!f) return null;
-    const start = f.off + 30 + dv.getUint16(f.off + 26, true) + dv.getUint16(f.off + 28, true);
-    const data = u8.subarray(start, start + f.size);
-    if (f.method === 0) return dec.decode(data);
-    const out = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
-    return dec.decode(out);
-  };
-}
-async function parseXLSX(buf) {
-  const get = await unzip(buf);
-  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
-  const wb = await get('xl/workbook.xml');
-  if (!wb) throw new Error('xlsx');
-  let path = 'xl/worksheets/sheet1.xml';
-  try {
-    const sh = xml(wb).getElementsByTagName('sheet')[0], rid = sh.getAttribute('r:id');
-    for (const r of xml(await get('xl/_rels/workbook.xml.rels')).getElementsByTagName('Relationship')) {
-      if (r.getAttribute('Id') === rid) { const t = r.getAttribute('Target'); path = t.startsWith('/') ? t.slice(1) : 'xl/' + t; }
-    }
-  } catch (e) { /* نكتفي بالمسار الافتراضي */ }
-  const shared = [], ssx = await get('xl/sharedStrings.xml');
-  if (ssx) for (const si of xml(ssx).getElementsByTagName('si')) shared.push([...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
-  const sx = await get(path);
-  if (!sx) throw new Error('xlsx');
-  const colIdx = ref => [...ref.replace(/\d+/g, '')].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
-  const rows = [];
-  for (const row of xml(sx).getElementsByTagName('row')) {
-    const arr = [];
-    for (const c of row.getElementsByTagName('c')) {
-      const ref = c.getAttribute('r'), col = ref ? colIdx(ref) : arr.length, t = c.getAttribute('t');
-      let v = '';
-      if (t === 'inlineStr') v = [...c.getElementsByTagName('t')].map(x => x.textContent).join('');
-      else { const ve = c.getElementsByTagName('v')[0]; v = ve ? ve.textContent : ''; if (t === 's') v = shared[+v] ?? ''; }
-      arr[col] = v;
-    }
-    rows.push(arr);
-  }
-  return rows;
-}
-async function fetchSheet(url) {
-  const m = url.match(/\/spreadsheets\/d\/([\w-]+)/);
-  if (!m) throw new Error('url');
-  const g = url.match(/[#&?]gid=(\d+)/);
-  const r = await fetch(`https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv${g ? '&gid=' + g[1] : ''}`);
-  const t = await r.text();
-  if (!r.ok || /^\s*</.test(t)) throw new Error('private');
-  return parseCSV(t);
-}
-
-/* مفاتيح مطابقة اسم الحلقة في الملفات: «حلقة فلان» أو «فلان» (اسم المعلم) أو الاسم القديم */
-const halaqaKeys = h => [halaqaLabel(h), h.name, byId(db.teachers, h.teacherId)?.name].filter(Boolean).map(norm);
-const halaqaQKeys = v => [norm(v), norm(String(v).replace(/^\s*حلقة\s+/, ''))];
-
-/* الحقول التي يمكن أن تكون «نظيرًا» لعمود في الملف المستورد */
-function fieldTargets(kind) {
-  const L = [{ id: 'core:phone', label: kind === 'students' ? 'جوال ولي الأمر' : 'الجوال', syn: HDR.phone }, { id: 'core:pin', label: 'كلمة المرور', syn: HDR.pin }];
-  if (kind === 'students') L.push({ id: 'core:halaqa', label: 'الحلقة', syn: HDR.halaqa },
-    { id: 'info:address', label: 'العنوان', syn: ['السكن'] }, { id: 'info:birth', label: 'تاريخ الميلاد', syn: ['الميلاد'] },
-    { id: 'info:study', label: 'الدراسة', syn: ['نوع الدراسة'] }, { id: 'info:grade', label: 'الصف الدراسي', syn: ['الصف'] },
-    { id: 'info:whatsapp', label: 'واتساب', syn: ['الواتساب', 'رقم الواتساب', 'whatsapp'] },
-    { id: 'info:gName', label: 'اسم ولي الأمر', syn: ['ولي الأمر'] }, { id: 'info:gJob', label: 'وظيفة ولي الأمر', syn: [] },
-    { id: 'info:job', label: 'الوظيفة', syn: ['الوظيفة الحالية'] }, { id: 'info:qual', label: 'المؤهل الدراسي', syn: ['المؤهل'] });
-  if (kind === 'teachers') Object.entries(PROF).forEach(([g, G]) => G.fields.forEach(f => { if (f[0] !== 'phone') L.push({ id: `prof:${g}:${f[0]}`, label: f[1], syn: [f[1].replace(/\s*\(.*\)\s*/, ''), ...(PROF_SYN[f[0]] || [])] }); }));
-  (db.fields[kind] || []).forEach(f => L.push({ id: 'extra:' + f.key, label: f.label, syn: [] }));
-  return L;
-}
-function setField(m, id, v) {
-  const [t, a, b] = id.split(':');
-  if (t === 'core') { if (a === 'phone') m.phone = normPhone(v) || v; else if (a === 'pin') m.pin = v; }
-  else if (t === 'prof') { m[a] = m[a] || {}; m[a][b] = v; }
-  else if (t === 'extra') { m.extra = m.extra || {}; m.extra[a] = v; }
-  else if (t === 'info') { m.info = m.info || {}; m.info[a] = /phone|whatsapp/i.test(a) ? normPhone(v) : v; }
-}
-
-/* تحويل الجدول إلى صفوف أعضاء: الأعمدة التي لها نظير تُربط بحقلها، والباقي يُجمع لتبويب «بيانات معلّقة» */
-function importRows(table, kind) {
-  const grid = table.map(r => Array.from(r || [], c => String(c ?? '').trim()));
-  let hi = -1, nameCol = -1;
-  for (let i = 0; i < Math.min(grid.length, 5) && hi < 0; i++) {
-    const j = grid[i].findIndex(c => HDR.name.some(x => hkey(x) === hkey(c)));
-    if (j >= 0) { hi = i; nameCol = j; }
-  }
-  if (hi < 0) return { err: 'لم أجد عمود «الاسم» في الصف الأول. استخدم القالب أو أضف عنوانًا للعمود.' };
-  const targets = fieldTargets(kind), cols = [], loose = [];
-  grid[hi].forEach((h, j) => {
-    if (!h || j === nameCol) return;
-    const k = hkey(h), t = targets.find(x => [x.label, ...x.syn].some(y => hkey(y) === k));
-    if (t && !cols.some(c => c.id === t.id)) cols.push({ j, id: t.id, header: h, label: t.label });
-    else if (!t) loose.push({ j, header: h });
-  });
-  const dg = s => String(s || '').replace(/[٠-٩]/g, c => c.charCodeAt(0) - 1632).replace(/[۰-۹]/g, c => c.charCodeAt(0) - 1776).trim();
-  const seen = new Set(db[kind].map(m => norm(m.name))), rows = [];
-  for (const r of grid.slice(hi + 1)) {
-    const name = (r[nameCol] || '').replace(/\s+/g, ' ');
-    if (!name) continue;
-    const k = norm(name), dup = seen.has(k); seen.add(k);
-    const vals = {};
-    cols.forEach(c => { vals[c.id] = c.id === 'core:halaqa' ? (r[c.j] || '') : dg(r[c.j]); });
-    rows.push({ name, dup, vals, halaqa: vals['core:halaqa'] || '', loose: loose.map(l => dg(r[l.j])) });
-  }
-  return rows.length ? { rows, cols, loose } : { err: 'لا توجد صفوف بيانات بعد صف العناوين.' };
-}
-
-function openImport(kind) {
-  const isS = kind === 'students';
-  const ov = document.createElement('div');
-  ov.className = 'overlay';
-  ov.innerHTML = `<div class="modal wide"><h2>استيراد ${isS ? 'الطلاب' : 'المعلمين'}</h2>
-  <div class="note">الصف الأول عناوين الأعمدة: ${isS ? 'الاسم، الحلقة، الجوال، كلمة المرور' : 'الاسم، الجوال، كلمة المرور'}. الاسم وحده مطلوب، وتُنشأ كلمة المرور تلقائيًا إن تُركت فارغة، والأسماء المكررة تُتجاهل. أي عمود آخر ليس له نظير في النظام يُحفظ في «بيانات معلّقة» لاعتماده.</div>
-  <div class="bar"><label class="btn" style="margin:0">اختيار ملف Excel أو CSV<input type="file" id="imf" accept=".xlsx,.csv,.tsv,.txt" hidden></label><button type="button" class="btn sm" id="imt">تحميل قالب</button></div>
-  <label>أو الصق خلايا منسوخة من Excel أو Google Sheets<textarea id="imp" rows="3"></textarea></label>
-  <label>أو رابط Google Sheets (مشارك لكل من لديه الرابط)<input id="imu" type="url" dir="ltr" placeholder="https://docs.google.com/spreadsheets/d/..."></label>
-  <div class="bar"><button type="button" class="btn" id="imgo">معاينة</button></div>
-  <div id="imprev"></div>
-  <div class="row"><button type="button" class="btn primary" id="imok" disabled>استيراد</button><button type="button" class="btn" data-close>إغلاق</button></div></div>`;
-  document.body.appendChild(ov);
-  const $ = s => ov.querySelector(s);
-  let parsed = [], cols = [], loose = [], createH = true;
-  $('[data-close]').onclick = () => ov.remove();
-
-  const msg = (t, bad) => {
-    $('#imprev').innerHTML = `<div class="note"${bad ? ' style="background:#fdf1f0;border-color:#e8c4c0;color:var(--red)"' : ''}>${esc(t)}</div>`;
-    $('#imok').disabled = true;
-  };
-  function preview() {
-    const fresh = parsed.filter(r => !r.dup), dups = parsed.length - fresh.length;
-    const known = new Set(db.halaqat.flatMap(halaqaKeys));
-    const newH = isS ? new Set(fresh.filter(r => r.halaqa && !halaqaQKeys(r.halaqa).some(k => known.has(k))).map(r => norm(r.halaqa))) : new Set();
-    const chip = t => `<span class="chip">${esc(t)}</span>`;
-    $('#imprev').innerHTML = `<p style="margin:.2rem 0 .6rem"><b>${fresh.length}</b> جاهز للاستيراد${dups ? ` — ${dups} مكرر سيُتجاهل` : ''}</p>
-    ${cols.length ? `<div class="note ok">أعمدة لها نظير وستُستورد في مكانها: ${cols.map(c => chip(c.header === c.label ? c.label : `${c.header} ← ${c.label}`)).join(' ')}</div>` : ''}
-    ${loose.length ? `<div class="note">أعمدة ليس لها نظير (${loose.length}): ${loose.map(l => chip(l.header)).join(' ')}<br>ستُحفظ قيمها في تبويب «بيانات معلّقة» لتراجعها وتعدّلها، ثم تعتمد إنشاء حقل لكل منها.</div>` : ''}
-    ${newH.size ? `<label style="display:flex;gap:.5rem;align-items:center;color:var(--text)"><input type="checkbox" id="imh" style="width:auto;margin:0" ${createH ? 'checked' : ''}> إنشاء ${newH.size} حلقة غير موجودة تلقائيًا</label>` : ''}
-    <div class="tbl"><table><tr><th>الاسم</th>${isS ? '<th>الحلقة</th>' : ''}<th>الجوال</th><th>الحالة</th></tr>${parsed.slice(0, 8).map(r => `<tr><td>${esc(r.name)}</td>${isS ? `<td>${esc(r.halaqa || '—')}</td>` : ''}<td>${esc(r.vals['core:phone'] || '—')}</td><td>${r.dup ? '<span class="tag" style="background:#fbeceb;color:var(--red)">مكرر</span>' : '<span class="tag">جديد</span>'}</td></tr>`).join('')}</table></div>
-    ${parsed.length > 8 ? `<p class="muted" style="margin:.4rem 0 0">… و${parsed.length - 8} صفوف أخرى</p>` : ''}`;
-    const cb = $('#imh'); if (cb) cb.onchange = () => { createH = cb.checked; };
-    $('#imok').disabled = !fresh.length;
-  }
-  function go(table) {
-    const r = importRows(table, kind);
-    if (r.err) { msg(r.err, true); return; }
-    parsed = r.rows; cols = r.cols; loose = r.loose; preview();
-  }
-
-  $('#imf').onchange = async e => {
-    const f = e.target.files[0]; if (!f) return;
-    msg('جارٍ قراءة الملف…');
-    try {
-      const buf = await f.arrayBuffer(), u8 = new Uint8Array(buf);
-      if (/\.xls$/i.test(f.name)) throw new Error('xls');
-      go(/\.xlsx$/i.test(f.name) || (u8[0] === 0x50 && u8[1] === 0x4b) ? await parseXLSX(buf) : parseCSV(decodeText(buf)));
-    } catch (err) {
-      msg(err.message === 'xls' ? 'صيغة xls القديمة غير مدعومة. احفظ الملف بصيغة xlsx أو CSV ثم أعد المحاولة.' : 'تعذّرت قراءة الملف. جرّب حفظه بصيغة CSV أو الصق الخلايا مباشرة.', true);
-    }
-    e.target.value = '';
-  };
-  $('#imgo').onclick = async () => {
-    const u = $('#imu').value.trim(), p = $('#imp').value;
-    try {
-      if (u) { msg('جارٍ جلب الملف…'); go(await fetchSheet(u)); }
-      else if (p.trim()) go(parseCSV(p));
-      else msg('اختر ملفًا أو الصق البيانات أو ضع رابط Google Sheets.', true);
-    } catch (err) {
-      msg(err.message === 'url' ? 'الرابط ليس رابط Google Sheets صالحًا.' : 'تعذّر جلب الملف. تأكد أن مشاركته «أي شخص لديه الرابط»، أو انسخ الخلايا والصقها هنا.', true);
-    }
-  };
-  $('#imu').addEventListener('keydown', e => { if (e.key === 'Enter') $('#imgo').click(); });
-  $('#imt').onclick = () => {
-    const csv = '\uFEFF' + (isS ? 'الاسم,الحلقة,الجوال,كلمة المرور\nمحمد أحمد,حلقة الفرقان,,\n' : 'الاسم,الجوال,كلمة المرور\nأحمد علي,,\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = isS ? 'قالب-الطلاب.csv' : 'قالب-المعلمين.csv'; a.click(); URL.revokeObjectURL(a.href);
-  };
-  $('#imok').onclick = () => {
-    const hmap = new Map(db.halaqat.flatMap(h => halaqaKeys(h).map(k => [k, h.id])));
-    let n = 0, nh = 0, np = 0;
-    const made = [];
-    parsed.filter(r => !r.dup).forEach(r => {
-      let hid = '';
-      if (isS && r.halaqa) {
-        const k = halaqaQKeys(r.halaqa).find(x => hmap.has(x));
-        if (k) hid = hmap.get(k);
-        else if (createH) {
-          /* حلقة جديدة: إن وُجد معلم بالاسم نفسه رُبطت به فتُسمّى باسمه */
-          const t = db.teachers.find(x => halaqaQKeys(r.halaqa).includes(norm(x.name)));
-          hid = uid(); db.halaqat.push({ id: hid, name: t ? '' : (/^\s*حلقة/.test(r.halaqa) ? r.halaqa : 'حلقة ' + r.halaqa), teacherId: t ? t.id : '', supervisorId: '', placeId: '' });
-          halaqaQKeys(r.halaqa).forEach(x => hmap.set(x, hid)); nh++;
-        }
-      }
-      const id = uid(), given = r.vals['core:pin'], pin = given || genPass();
-      const m = isS ? { id, name: r.name, halaqaId: hid, phone: '', pin } : { id, name: r.name, phone: '', pin };
-      cols.forEach(c => { if (c.id !== 'core:halaqa' && c.id !== 'core:pin' && r.vals[c.id]) setField(m, c.id, r.vals[c.id]); });
-      db[kind].push(m); made.push([id, r]);
-      if (!given) ui.shown[id] = true;
-      n++;
-    });
-    loose.forEach((l, i) => {
-      const values = made.map(([mid, r]) => ({ mid, v: r.loose[i] })).filter(x => x.v);
-      if (values.length) { db.pending.push({ id: uid(), kind, header: l.header, values, date: today() }); np++; }
-    });
-    ov.remove(); save(); render();
-    toast(`تم استيراد ${n} ${isS ? 'طالب' : 'معلم'}${nh ? ` وإنشاء ${nh} حلقة` : ''}${np ? ` — ${np} عمود في «بيانات معلّقة»` : ''}`);
-  };
-}
-
-/* استمارة الطالب: حقول مشتركة، وحقول خاصة بالصغار (ولي الأمر) أو الكبار */
-function studentForm(st) {
-  const isNew = !st;
-  st = st || { id: uid(), name: '', cat: 'child', halaqaId: ui.fh || '', phone: '', pin: genPass(), info: {} };
-  const I = st.info || {}, T = I.test || {};
-  let photo = st.photo || '';
-  const v = k => esc(I[k] ?? '');
-  const sel = (name, list, val, blank) => `<select name="${name}">${blank ? `<option value="">${blank}</option>` : ''}${list.map(o => { const [ov, ol] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(ov)}" ${String(ov) === String(val ?? '') ? 'selected' : ''}>${esc(ol)}</option>`; }).join('')}</select>`;
-  const age = st.cat === 'adult' && I.birthYear ? new Date().getFullYear() - I.birthYear : '';
-  const ov = document.createElement('div');
-  ov.className = 'overlay';
-  ov.innerHTML = `<div class="modal wide sform"><h2>${isNew ? 'استمارة تقديم' : 'تعديل بيانات: ' + esc(st.name)}</h2>
-    <div class="sf-top">
-      <div class="ph"><img data-ph alt="" ${photo ? `src="${photo}"` : 'hidden'}><span data-ph0 class="ph0" ${photo ? 'hidden' : ''}>${TAB_ICONS.profile}</span>
-        <div class="ph-btns"><label class="btn sm" style="margin:0">صورة<input type="file" accept="image/*" data-sfphoto hidden></label><button type="button" class="btn sm" data-sfnophoto>إزالة</button></div></div>
-      <div class="sf-main">
-        <div class="seg"><label><input type="radio" name="cat" value="child" ${st.cat !== 'adult' ? 'checked' : ''}><span>صغير — له ولي أمر</span></label><label><input type="radio" name="cat" value="adult" ${st.cat === 'adult' ? 'checked' : ''}><span>كبير</span></label></div>
-        <label><span data-c="child">اسم الطالب</span><span data-c="adult">الاسم</span><input name="name" value="${esc(st.name)}" required></label>
-      </div>
-    </div>
-    <fieldset class="tfs" data-c="child"><legend>خاص بالطالب</legend>
-      <div class="two"><label>تاريخ الميلاد<input type="date" name="birth" value="${v('birth')}"></label><label>السن<input data-agec disabled></label></div>
-      <div class="two"><label>الدراسة${sel('study', STUDY, I.study, '—')}</label><label>الصف الدراسي (وقت التقديم)<input name="grade" value="${v('grade')}"></label></div>
-    </fieldset>
-    <fieldset class="tfs" data-c="adult"><legend>بيانات</legend>
-      <div class="two"><label>السن (سنة)<input type="number" name="age" min="5" max="110" value="${age}"></label><label>الحالة الاجتماعية${sel('marital', MARITAL, I.marital, '—')}</label></div>
-      <div class="two"><label>المؤهل الدراسي<input name="qual" value="${v('qual')}"></label><label>طالب / خريج${sel('qualStatus', QSTAT, I.qualStatus, '—')}</label></div>
-      <div class="two"><label>الوظيفة الحالية<input name="job" value="${v('job')}"></label><label>الوقت المتاح للحضور<input name="avail" value="${v('avail')}"></label></div>
-    </fieldset>
-    <fieldset class="tfs"><legend>العنوان والتواصل</legend>
-      <label>العنوان<input name="address" value="${v('address')}"></label>
-      <div class="two"><label>رقم الهاتف<input type="tel" dir="ltr" name="sphone" value="${v('phone')}"></label><label>واتساب<input type="tel" dir="ltr" name="whatsapp" value="${v('whatsapp')}" placeholder="إن اختلف عن الهاتف"></label></div>
-    </fieldset>
-    <fieldset class="tfs" data-c="child"><legend>خاص بولي الأمر</legend>
-      <div class="two"><label>اسم ولي الأمر<input name="gName" value="${v('gName')}"></label><label>الوظيفة<input name="gJob" value="${v('gJob')}"></label></div>
-      <div class="two"><label>رقم الهاتف<input type="tel" dir="ltr" name="gPhone" value="${v('gPhone')}"></label><label>واتساب<input type="tel" dir="ltr" name="gWhatsapp" value="${v('gWhatsapp')}" placeholder="إن اختلف عن الهاتف"></label></div>
-      <div class="two"><label>صلة القرابة${sel('gRel', RELS, I.gRel, '—')}</label><label data-rel>حدّد صلة القرابة<input name="gRelOther" value="${v('gRelOther')}"></label></div>
-    </fieldset>
-    <fieldset class="tfs"><legend>اختبار تحديد مستوى</legend>
-      <div class="three"><label>قراءة${sel('tRead', GRADES, T.read, '—')}</label><label>تجويد${sel('tTaj', GRADES, T.tajweed, '—')}</label><label>حفظ<input name="tHifz" value="${esc(T.hifz || '')}" placeholder="مثال: جزء عم"></label></div>
-    </fieldset>
-    <fieldset class="tfs"><legend>قرار الإدارة</legend>
-      <label><span data-c="child">يلتحق الطالب بحلقة</span><span data-c="adult">يلتحق الأخ بحلقة</span>${sel('halaqaId', halaqaOpts().map(o => [o.v, o.l]), st.halaqaId, '— لم يُحدَّد بعد —')}</label>
-      <div class="three"><label>تحرر يوم<input type="date" name="joinDate" value="${v('joinDate') || (isNew ? today() : '')}"></label><label>الاشتراك الشهري (جنيه)<input type="number" min="0" name="fee" value="${v('fee')}"></label><label>كلمة المرور للدخول<input name="pin" value="${esc(st.pin)}" required dir="ltr"></label></div>
-      <label class="chk"><input type="checkbox" name="pledge" ${I.pledge ? 'checked' : ''}><span data-c="child">وقّع ولي الأمر على التنبيهات</span><span data-c="adult">وقّع المتقدم على التنبيهات</span></label>
-    </fieldset>
-    <div class="row"><button type="button" class="btn primary" data-save>حفظ</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
-  document.body.appendChild(ov);
-  const $ = q => ov.querySelector(q), val = n => (ov.querySelector(`[name=${n}]`)?.value ?? '').trim();
-  const cat = () => ov.querySelector('[name=cat]:checked').value;
-  const sync = () => {
-    ov.querySelectorAll('[data-c]').forEach(x => { x.hidden = x.dataset.c !== cat(); });
-    $('[data-rel]').hidden = cat() !== 'child' || val('gRel') !== 'شخص آخر';
-    const a = ageOf({ cat: 'child', info: { birth: val('birth') } });
-    $('[data-agec]').value = a === '' ? '' : a + ' سنة';
-  };
-  ov.addEventListener('change', sync); ov.addEventListener('input', sync); sync();
-  $('[data-sfphoto]').onchange = e => {
-    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
-    const url = URL.createObjectURL(f), img = new Image();
-    img.onload = () => {
-      /* قص مربع من الوسط وتصغير إلى 160 بكسل حتى لا تثقل الصور ذاكرة المتصفح */
-      const S = 160, c = document.createElement('canvas'), m = Math.min(img.naturalWidth, img.naturalHeight);
-      c.width = c.height = S;
-      c.getContext('2d').drawImage(img, (img.naturalWidth - m) / 2, (img.naturalHeight - m) / 2, m, m, 0, 0, S, S);
-      let d = c.toDataURL('image/webp', .72); if (!d.startsWith('data:image/webp')) d = c.toDataURL('image/jpeg', .75);
-      URL.revokeObjectURL(url); photo = d;
-      $('[data-ph]').src = d; $('[data-ph]').hidden = false; $('[data-ph0]').hidden = true;
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); toast('تعذّرت قراءة الصورة'); };
-    img.src = url;
-  };
-  $('[data-sfnophoto]').onclick = () => { photo = ''; $('[data-ph]').hidden = true; $('[data-ph0]').hidden = false; };
-  $('[data-close]').onclick = () => ov.remove();
-  $('[data-save]').onclick = () => {
-    const name = val('name').replace(/\s+/g, ' ');
-    if (!name) { toast('اكتب الاسم'); return; }
-    if (!val('pin')) { toast('اكتب كلمة المرور'); return; }
-    if (db.students.some(x => x.id !== st.id && norm(x.name) === norm(name))) { toast('يوجد طالب بالاسم نفسه'); return; }
-    const c = cat(), ageN = +val('age');
-    if (c === 'adult' && val('age') && !(ageN >= 5 && ageN <= 110)) { toast('السن غير صحيح'); return; }
-    const info = { address: val('address'), phone: normPhone(val('sphone')), whatsapp: normPhone(val('whatsapp')), joinDate: val('joinDate'), fee: val('fee') === '' ? '' : +val('fee'), pledge: $('[name=pledge]').checked,
-      test: { read: val('tRead'), tajweed: val('tTaj'), hifz: val('tHifz') } };
-    if (c === 'child') Object.assign(info, { birth: val('birth'), study: val('study'), grade: val('grade'), gName: val('gName'), gJob: val('gJob'), gPhone: normPhone(val('gPhone')), gWhatsapp: normPhone(val('gWhatsapp')), gRel: val('gRel'), gRelOther: val('gRel') === 'شخص آخر' ? val('gRelOther') : '' });
-    else Object.assign(info, { birthYear: val('age') ? new Date().getFullYear() - ageN : '', marital: val('marital'), qual: val('qual'), qualStatus: val('qualStatus'), job: val('job'), avail: val('avail') });
-    Object.assign(st, { name, cat: c, halaqaId: val('halaqaId'), pin: val('pin'), photo, info: { ...(st.info || {}), ...info } });
-    /* رقم التواصل الأساسي: ولي الأمر للصغير، والطالب نفسه للكبير */
-    st.phone = c === 'child' ? (info.gPhone || info.phone || st.phone || '') : (info.phone || st.phone || '');
-    if (isNew) db.students.push(st);
-    ov.remove(); save(); render(); toast(isNew ? 'تم حفظ الاستمارة' : 'تم حفظ التعديلات');
-  };
-}
-/* ملف الطالب: عرض الاستمارة كاملة مع إمكان طباعتها */
-function studentCard(st) {
-  if (!st) return;
-  const I = st.info || {}, T = I.test || {}, child = st.cat !== 'adult', h = byId(db.halaqat, st.halaqaId);
-  const row = (l, x) => (x === '' || x == null) ? '' : `<tr><th>${l}</th><td>${esc(x)}</td></tr>`;
-  const wa = n => n ? `<a href="https://wa.me/2${esc(n)}" target="_blank" rel="noopener" dir="ltr">${esc(n)}</a>` : '';
-  const telRow = (l, p, w) => (p || w) ? `<tr><th>${l}</th><td><span dir="ltr">${esc(p || '—')}</span>${w && w !== p ? ` — واتساب ${wa(w)}` : ''}</td></tr>` : '';
-  const sec = (t, rows) => rows.trim() ? `<h3 class="sc-h">${t}</h3><div class="tbl"><table>${rows}</table></div>` : '';
-  const a = ageOf(st);
-  const html = `<div class="scard">
-    <div class="sc-head">${avatar(st, 96)}<div><h2 style="margin:0">${esc(st.name)}</h2><p class="muted" style="margin:.2rem 0 0"><span class="tag ${child ? '' : 'tag-a'}">${CATS[child ? 'child' : 'adult']}</span> ${a === '' ? '' : a + ' سنة'}</p></div></div>
-    ${sec(child ? 'خاص بالطالب' : 'بيانات', child
-      ? row('تاريخ الميلاد', I.birth) + row('الدراسة', I.study) + row('الصف الدراسي', I.grade)
-      : row('المؤهل الدراسي', [I.qual, I.qualStatus].filter(Boolean).join(' — ')) + row('الحالة الاجتماعية', I.marital) + row('الوظيفة الحالية', I.job) + row('الوقت المتاح للحضور', I.avail))}
-    ${sec('العنوان والتواصل', row('العنوان', I.address) + telRow('رقم الهاتف', I.phone, I.whatsapp))}
-    ${child ? sec('خاص بولي الأمر', row('اسم ولي الأمر', I.gName) + telRow('رقم الهاتف', I.gPhone, I.gWhatsapp) + row('الوظيفة', I.gJob) + row('صلة القرابة', I.gRel === 'شخص آخر' ? (I.gRelOther || 'شخص آخر') : I.gRel)) : ''}
-    ${sec('اختبار تحديد مستوى', row('قراءة', T.read) + row('تجويد', T.tajweed) + row('حفظ', T.hifz))}
-    ${sec('قرار الإدارة', row(child ? 'يلتحق الطالب بحلقة' : 'يلتحق الأخ بحلقة', h ? halaqaLabel(h) : '') + row('بدار', placeName(h)) + row('وقت الحلقة', timeText(h)) + row('تحرر يوم', I.joinDate) + row('الاشتراك الشهري', I.fee === '' || I.fee == null ? '' : I.fee + ' جنيه') + row('التوقيع على التنبيهات', I.pledge ? (child ? 'وقّع ولي الأمر' : 'وقّع المتقدم') : 'لم يوقّع بعد'))}
-    <div class="row noprint">${session?.role === 'admin' ? `<button class="btn primary" data-act="editStudent" data-id="${st.id}">تعديل</button>` : ''}<button class="btn" data-act="printCard">طباعة</button></div>
-  </div>`;
-  openInfo('ملف الطالب', html);
-}
-
-/* نموذج الحلقة: المكان والمعلم والمشرف، والوقت بالساعة أو بالصلوات */
-function halaqaForm(h, presetPlace) {
-  const isNew = !h, w = h?.time || { mode: 'prayer', fromPrayer: 'العصر', toKind: 'prayer', toPrayer: 'المغرب' };
-  const sel = (name, list, val) => `<select name="${name}">${list.map(o => `<option value="${esc(o.v)}" ${String(o.v) === String(val ?? '') ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`;
-  const P = PRAYERS.map(x => ({ v: x, l: x }));
-  const ov = document.createElement('div');
-  ov.className = 'overlay';
-  ov.innerHTML = `<div class="modal"><h2>${isNew ? 'حلقة جديدة' : 'تعديل الحلقة'}</h2>
-    <label>المكان${sel('placeId', [{ v: '', l: '— اختر المكان —' }, ...db.places.map(p => ({ v: p.id, l: p.name + ' (' + p.type + ')' }))], h?.placeId ?? presetPlace)}</label>
-    <label>المعلم — الحلقة تُسمّى باسمه${sel('teacherId', [{ v: '', l: '— بدون —' }, ...opts(db.teachers)], h?.teacherId)}</label>
-    <label>المشرف${sel('supervisorId', [{ v: '', l: '— بدون —' }, ...opts(db.supervisors)], h?.supervisorId)}</label>
-    <fieldset class="tfs"><legend>وقت الحلقة</legend>
-      <div class="seg"><label><input type="radio" name="mode" value="prayer" ${w.mode !== 'clock' ? 'checked' : ''}><span>بالصلوات</span></label><label><input type="radio" name="mode" value="clock" ${w.mode === 'clock' ? 'checked' : ''}><span>بالساعة</span></label></div>
-      <div data-m="prayer"><div class="two"><label>من بعد صلاة${sel('fromPrayer', P, w.fromPrayer || 'العصر')}</label><label>إلى${sel('toKind', [{ v: 'prayer', l: 'صلاة' }, { v: 'clock', l: 'الساعة' }], w.toKind || 'prayer')}</label></div>
-        <div class="two"><label data-k="prayer">صلاة${sel('toPrayer', [{ v: '', l: '—' }, ...P], w.toPrayer)}</label><label data-k="clock">الساعة<input type="time" name="toTime" value="${esc(w.toTime || '')}"></label></div></div>
-      <div data-m="clock" class="two"><label>من الساعة<input type="time" name="from" value="${esc(w.from || '')}"></label><label>إلى الساعة<input type="time" name="to" value="${esc(w.to || '')}"></label></div>
-      <p class="tprev"></p>
-    </fieldset>
-    ${h && !h.teacherId && h.name ? `<label>اسم مؤقت (يُستبدل باسم المعلم عند اختياره)<input name="name" value="${esc(h.name)}"></label>` : ''}
-    <div class="row"><button type="button" class="btn primary" data-save>حفظ</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
-  document.body.appendChild(ov);
-  const $ = q => ov.querySelector(q), val = n => ov.querySelector(`[name=${n}]`)?.value;
-  const mode = () => ov.querySelector('[name=mode]:checked').value;
-  const read = () => mode() === 'clock' ? { mode: 'clock', from: val('from'), to: val('to') } : { mode: 'prayer', fromPrayer: val('fromPrayer'), toKind: val('toKind'), toPrayer: val('toPrayer'), toTime: val('toTime') };
-  const sync = () => {
-    ov.querySelectorAll('[data-m]').forEach(x => { x.hidden = x.dataset.m !== mode(); });
-    ov.querySelectorAll('[data-k]').forEach(x => { x.hidden = x.dataset.k !== val('toKind'); });
-    const t = byId(db.teachers, val('teacherId'));
-    $('.tprev').innerHTML = `<b>${esc(t ? 'حلقة ' + t.name : 'حلقة بلا معلم')}</b> — ${esc(timeText({ time: read() }) || 'حدّد الوقت')}`;
-  };
-  ov.addEventListener('change', sync); ov.addEventListener('input', sync); sync();
-  $('[data-close]').onclick = () => ov.remove();
-  $('[data-save]').onclick = () => {
-    const t = read();
-    if (!val('placeId')) { toast('اختر المكان'); return; }
-    if (t.mode === 'clock') {
-      if (!t.from || !t.to) { toast('حدّد ساعة البداية والنهاية'); return; }
-      if (t.from >= t.to) { toast('ساعة النهاية يجب أن تكون بعد البداية'); return; }
-    } else if (t.toKind === 'prayer') {
-      if (!t.toPrayer) { toast('حدّد الصلاة التي تنتهي عندها الحلقة'); return; }
-      if (PRAYERS.indexOf(t.toPrayer) <= PRAYERS.indexOf(t.fromPrayer)) { toast('صلاة النهاية يجب أن تكون بعد صلاة البداية'); return; }
-    } else if (!t.toTime) { toast('حدّد ساعة انتهاء الحلقة'); return; }
-    const o = { placeId: val('placeId'), teacherId: val('teacherId'), supervisorId: val('supervisorId'), time: t };
-    if (val('name') !== undefined) o.name = val('name').trim();
-    if (isNew) db.halaqat.push({ id: uid(), ...o }); else Object.assign(h, o);
-    ov.remove(); save(); render(); toast('تم حفظ الحلقة');
-  };
-}
-
-/* ============ الإجراءات ============ */
-const A = {
-  lmode: d => { if (!ui.pick) return; ui.pick.sel = +d.i; renderPick(); document.querySelector('#login input[name=pin]')?.focus(); },
-  switchMode: () => {
-    const list = sameName();
-    if (!list.length) return;
-    openInfo('تبديل الوضع', `<p class="muted">اختر الوضع الذي تريد الانتقال إليه:</p><div class="modes">${list.map(a => `<button type="button" class="mode" data-act="toMode" data-r="${a.role}" data-id="${esc(a.u.id)}">${ICONS[a.role]}<span>${esc(modeLabel(a, list))}</span></button>`).join('')}</div>`);
-  },
-  toMode: d => {
-    document.querySelectorAll('.overlay').forEach(o => o.remove());
-    const acc = byId(db[COLL[d.r]] || [], d.id), cur = me();
-    if (!acc || !cur) return;
-    const go = () => { session = { role: d.r, id: acc.id }; ss.set(SKEY, JSON.stringify(session)); ui.tab = null; ui.hid = ''; ui.shown = {}; render(); toast('أنت الآن في وضع ' + ROLE_L[d.r]); };
-    if (acc.pin === cur.pin) { go(); return; }
-    openForm('كلمة مرور حساب ' + ROLE_L[d.r], [{ name: 'pin', label: 'كلمة المرور', type: 'password', required: true }], v => { if (v.pin !== acc.pin) return 'كلمة المرور غير صحيحة'; go(); });
-  },
-  logout: () => { ui.shown = {}; ui.pick = null; session = null; ss.del(SKEY); ui.tab = null; render(); },
-  tab: d => { ui.tab = d.v; ui.nav = false; render(); window.scrollTo(0, 0); },
-  navToggle: () => { ui.nav = !ui.nav; document.querySelector('.shell')?.classList.toggle('open', ui.nav); },
-  sideToggle: () => {
-    /* تبديل الصنف فقط دون إعادة الرسم، حتى تعمل الحركة الانسيابية */
-    ui.collapsed = !ui.collapsed; saveUI();
-    document.querySelector('.shell')?.classList.toggle('collapsed', ui.collapsed);
-    const t = document.querySelector('.side-toggle'), l = ui.collapsed ? 'فرد القائمة' : 'طي القائمة';
-    if (t) { t.title = l; t.setAttribute('aria-label', l); t.setAttribute('aria-expanded', String(!ui.collapsed)); }
-  },
-  navClose: () => { ui.nav = false; document.querySelector('.shell')?.classList.remove('open'); },
-  panel: () => { if (session?.role !== 'admin') return; ui.tab = 'settings'; render(); window.scrollTo(0, 0); },
-  hist: d => openInfo('سجل: ' + sName(d.id), historyTable(d.id)),
-
-  psub: d => { ui.psub = d.v; render(); },
-  editProf: d => {
-    const t = byId(db.teachers, d.id), g = d.g, G = PROF[g];
-    if (!t || !G || (session.role === 'teacher' && (session.id !== t.id || G.adminOnly))) { toast('غير مصرح'); return; }
-    openForm(G.title, G.fields.map(f => ({ name: f[0], label: f[1], type: f[2] || 'text', value: pv(t, g, f[0]), options: f[3] && f[3].map(x => ({ v: x, l: x })) })), v => {
-      if (g === 'tech' && v.memorized !== '' && (+v.memorized < 0 || +v.memorized > 30)) return 'الأجزاء المحفوظة من 0 إلى 30';
-      t[g] = t[g] || {};
-      G.fields.forEach(f => { const x = (v[f[0]] ?? '').trim(); if (f[0] === 'phone') t.phone = x; else t[g][f[0]] = x; });
-    });
-  },
-
-  msub: d => { ui.msub = d.v; render(); },
-  importMembers: d => { if (session?.role === 'admin') openImport(d.k === 'students' ? 'students' : 'teachers'); },
-  togglePw: d => { ui.shown[d.id] = !ui.shown[d.id]; render(); },
-  copyPw: d => {
-    const m = byId(db[d.k], d.id);
-    const fail = () => toast('كلمة المرور: ' + m.pin);
-    try { navigator.clipboard.writeText(m.pin).then(() => toast('تم نسخ كلمة المرور'), fail); } catch (e) { fail(); }
-  },
-  newPw: d => {
-    const m = byId(db[d.k], d.id);
-    ask('إنشاء كلمة مرور جديدة لـ «' + m.name + '»؟ ستتوقف القديمة عن العمل.', () => { m.pin = genPass(); ui.shown[m.id] = true; save(); render(); });
-  },
-  editName: d => {
-    const m = byId(db[d.k], d.id);
-    openForm('تعديل الاسم', [{ name: 'name', label: 'الاسم', value: m.name, required: true }], v => { m.name = v.name.trim(); });
-  },
-  addMember: d => {
-    const k = d.k, one = KIND_ONE[k];
-    openForm('إضافة ' + one, [{ name: 'name', label: 'الاسم', required: true }, { type: 'note', label: 'ستُنشأ كلمة المرور تلقائيًا.' }], v => {
-      const id = uid(), pin = genPass();
-      const name = v.name.trim();
-      if (db[k].some(m => norm(m.name) === norm(name))) return `يوجد ${one} بالاسم نفسه`;
-      db[k].push(k === 'students' ? { id, name, halaqaId: '', phone: '', pin } : k === 'admins' ? { id, name, pin } : { id, name, phone: '', pin });
-      ui.shown[id] = true;
-      toast('تم إنشاء الحساب — كلمة المرور: ' + pin);
-    });
-  },
-
-  addTeacher: () => openForm('معلم جديد', [{ name: 'name', label: 'الاسم', required: true }, { name: 'phone', label: 'الجوال', type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: genPass(), required: true }],
-    v => { db.teachers.push({ id: uid(), name: v.name.trim(), phone: v.phone, pin: v.pin }); }),
-  editTeacher: d => { const t = byId(db.teachers, d.id); openForm('تعديل معلم', [{ name: 'name', label: 'الاسم', value: t.name, required: true }, { name: 'phone', label: 'الجوال', value: t.phone, type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: t.pin, required: true }],
-    v => { Object.assign(t, { name: v.name.trim(), phone: v.phone, pin: v.pin }); }); },
-  delTeacher: d => ask('حذف المعلم؟ ستبقى حلقاته بدون معلم.', () => { db.teachers = db.teachers.filter(t => t.id !== d.id); db.halaqat.forEach(h => { if (h.teacherId === d.id) h.teacherId = ''; }); save(); render(); }),
-
-  addHalaqa: d => { if (!db.places.length) { toast('أضف مكانًا أولًا'); A.addPlace(); return; } halaqaForm(null, d.p); },
-  editHalaqa: d => halaqaForm(byId(db.halaqat, d.id)),
-  addPlace: () => openForm('مكان جديد', [{ name: 'name', label: 'اسم المكان', required: true }, { name: 'type', label: 'النوع', type: 'select', options: PLACE_TYPES.map(x => ({ v: x, l: x })) }, { name: 'address', label: 'العنوان (اختياري)' }],
-    v => { const n = v.name.trim(); if (db.places.some(x => norm(x.name) === norm(n))) return 'يوجد مكان بالاسم نفسه'; db.places.push({ id: uid(), name: n, type: v.type, address: v.address.trim() }); }),
-  editPlace: d => { const pl = byId(db.places, d.id); if (!pl) return; openForm('تعديل المكان', [{ name: 'name', label: 'اسم المكان', value: pl.name, required: true }, { name: 'type', label: 'النوع', type: 'select', value: pl.type, options: PLACE_TYPES.map(x => ({ v: x, l: x })) }, { name: 'address', label: 'العنوان (اختياري)', value: pl.address || '' }],
-    v => { Object.assign(pl, { name: v.name.trim(), type: v.type, address: v.address.trim() }); }); },
-  delPlace: d => ask('حذف المكان؟ ستبقى حلقاته بلا مكان حتى تنقلها.', () => { db.places = db.places.filter(x => x.id !== d.id); db.halaqat.forEach(h => { if (h.placeId === d.id) h.placeId = ''; }); save(); render(); }),
-  delHalaqa: d => ask('حذف الحلقة؟ سيبقى طلابها بدون حلقة.', () => { db.halaqat = db.halaqat.filter(h => h.id !== d.id); db.students.forEach(s => { if (s.halaqaId === d.id) s.halaqaId = ''; }); save(); render(); }),
-
-  addStudent: () => studentForm(null),
-  editStudent: d => { document.querySelectorAll('.overlay').forEach(o => o.remove()); studentForm(byId(db.students, d.id)); },
-  studentCard: d => studentCard(byId(db.students, d.id)),
-  printCard: () => { document.body.classList.add('print-modal'); window.print(); setTimeout(() => document.body.classList.remove('print-modal'), 500); },
-  delMember: d => {
-    if (d.k === 'teachers') return A.delTeacher(d);
-    if (d.k === 'students') return A.delStudent(d);
-    if (d.k === 'admins') {
-      if (db.admins.length < 2) { toast('لا يمكن حذف آخر إداري'); return; }
-      if (session.role === 'admin' && session.id === d.id) { toast('لا يمكنك حذف حسابك الحالي'); return; }
-      ask('حذف الإداري؟', () => { db.admins = db.admins.filter(a => a.id !== d.id); save(); render(); });
-      return;
-    }
-    ask('حذف المشرف؟ ستبقى حلقاته بدون مشرف.', () => { db.supervisors = db.supervisors.filter(x => x.id !== d.id); db.halaqat.forEach(h => { if (h.supervisorId === d.id) h.supervisorId = ''; }); save(); render(); });
-  },
-  approvePending: d => {
-    const p = db.pending.find(x => x.id === d.id), card = document.querySelector(`[data-pcard="${d.id}"]`);
-    if (!p || !card) return;
-    const label = card.querySelector('[data-pl]').value.trim(), type = card.querySelector('[data-pt]').value, dest = card.querySelector('[data-pd]').value;
-    let id = dest;
-    if (dest === 'new') {
-      if (!label) { toast('اكتب اسم الحقل'); return; }
-      if (fieldTargets(p.kind).some(t => hkey(t.label) === hkey(label)) || hkey(label) === hkey('الاسم')) { toast('يوجد حقل بهذا الاسم؛ اختر «ربط بالحقل الموجود» أو غيّر الاسم'); return; }
-      const key = 'f_' + uid();
-      db.fields[p.kind].push({ key, label, type });
-      id = 'extra:' + key;
-    }
-    let n = 0;
-    card.querySelectorAll('[data-pv]').forEach(inp => {
-      const x = p.values[+inp.dataset.pv], m = x && byId(db[p.kind], x.mid), v = inp.value.trim();
-      if (m && v) { setField(m, id, v); n++; }
-    });
-    db.pending = db.pending.filter(x => x !== p); save(); render();
-    toast(`تم الاعتماد — ${n} قيمة`);
-  },
-  dropPending: d => ask('حذف بيانات هذا العمود نهائيًا دون اعتمادها؟', () => { db.pending = db.pending.filter(x => x.id !== d.id); save(); render(); }),
-  delField: d => ask('حذف هذا الحقل وكل قيمه من الأعضاء؟', () => { db.fields[d.k] = db.fields[d.k].filter(f => f.key !== d.id); db[d.k].forEach(m => { if (m.extra) delete m.extra[d.id]; }); save(); render(); }),
-  editExtra: d => {
-    const m = byId(db[d.k] || [], d.id), F = (db.fields[d.k] || []);
-    if (!m || !F.length) return;
-    if (session.role !== 'admin' && !(session.role === 'teacher' && d.k === 'teachers' && session.id === m.id)) { toast('غير مصرح'); return; }
-    openForm('بيانات إضافية: ' + m.name, F.map(f => ({ name: f.key, label: f.label, type: f.type || 'text', value: (m.extra || {})[f.key] || '' })), v => {
-      m.extra = m.extra || {};
-      F.forEach(f => { m.extra[f.key] = (v[f.key] ?? '').trim(); });
-    });
-  },
-  delStudent: d => ask('حذف الطالب وكل سجلاته؟', () => { db.students = db.students.filter(s => s.id !== d.id); db.records = db.records.filter(r => r.studentId !== d.id); db.attendance = db.attendance.filter(a => a.studentId !== d.id); save(); render(); }),
-
-  addNews: () => openForm('إعلان جديد', [{ name: 'text', label: 'النص', type: 'textarea' }, { name: 'audience', label: 'الجمهور', type: 'select', options: [{ v: 'all', l: 'الجميع' }, { v: 'teacher', l: 'المعلمون' }, { v: 'supervisor', l: 'المشرفون' }, { v: 'student', l: 'الطلاب' }] }],
-    v => { if (!v.text.trim()) return 'اكتب نص الإعلان'; db.news.push({ id: uid(), text: v.text.trim(), audience: v.audience, date: today() }); }),
-  delNews: d => { db.news = db.news.filter(n => n.id !== d.id); save(); render(); },
-
-  themePreset: d => { const p = PRESETS[+d.i]; if (!p) return; db.settings.theme = { ...p[1] }; save(); applyTheme(); render(); toast('تم تطبيق نمط «' + p[0] + '»'); },
-  themeReset: () => ask('استعادة الألوان والشعار الافتراضيين؟', () => { db.settings.theme = {}; delete db.settings.logo; save(); applyTheme(); render(); }),
-  logoReset: () => { delete db.settings.logo; save(); applyTheme(); render(); toast('عاد الشعار الافتراضي'); },
-  themeFromLogo: () => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const p = paletteFrom(img);
-        if (!Object.keys(p).length) { toast('لم أجد ألوانًا واضحة في الشعار'); return; }
-        db.settings.theme = { ...(db.settings.theme || {}), ...p }; save(); applyTheme(); render(); toast('تم تطبيق ألوان الشعار');
-      } catch (e) { toast('تعذّر تحليل ألوان الشعار'); }
-    };
-    img.onerror = () => toast('تعذّر تحميل الشعار');
-    img.src = logoSrc();
-  },
-  editSettings: () => openForm('الإعدادات', [{ name: 'org', label: 'اسم المؤسسة', value: db.settings.org, required: true }, { type: 'note', label: 'كلمات مرور الإداريين تُدار من تبويب «الأعضاء» ← الإداريون.' }],
-    v => { db.settings.org = v.org.trim(); }),
-  export: () => {
-    const json = JSON.stringify(db);
-    try {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
-      a.download = `halaqat-backup-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    } catch (e) { /* بعض البيئات تمنع التنزيل */ }
-    /* بديل يعمل في كل مكان: النص كاملًا للنسخ واللصق */
-    openInfo('النسخة الاحتياطية', `<p class="muted">إن لم يبدأ التنزيل، انسخ النص كاملًا واحفظه أو أرسله لنفسك، ثم استخدم «لصق نسخة» على الجهاز الآخر. النص يحتوي كلمات المرور والمرتبات فاحفظه بأمان.</p><textarea id="bk" rows="7" readonly dir="ltr" style="font-family:ui-monospace,monospace;font-size:.72rem">${esc(json)}</textarea><div class="row"><button class="btn primary" data-act="copyBackup">نسخ الكل</button><span class="muted" style="align-self:center">${Math.round(json.length / 1024)} ك.ب</span></div>`);
-  },
-  copyBackup: () => {
-    const t = document.getElementById('bk'); if (!t) return;
-    t.focus(); t.select();
-    const fallback = () => { let ok = false; try { ok = document.execCommand('copy'); } catch (e) { /* ignore */ } toast(ok ? 'تم النسخ' : 'حدّد النص وانسخه يدويًا'); };
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t.value).then(() => toast('تم النسخ'), fallback); else fallback();
-  },
-  pasteBackup: () => openForm('لصق نسخة احتياطية', [{ type: 'note', label: 'سيتم استبدال كل البيانات الحالية على هذا الجهاز بالنسخة الملصقة.' }, { name: 'json', label: 'الصق نص النسخة الاحتياطية هنا', type: 'textarea', required: true }], v => {
-    let d; try { d = JSON.parse(v.json); } catch (e) { return 'النص غير صالح — تأكد من نسخه كاملًا'; }
-    if (!validBackup(d)) return 'هذا النص ليس نسخة احتياطية من التطبيق';
-    db = migrate(d); session = null; ss.del(SKEY); applyTheme(); toast('تم الاستيراد — ادخل بحسابك');
-  }),
-  reset: () => ask('سيتم مسح كل البيانات نهائيًا. متابعة؟', () => { db = seed(); session = null; ss.del(SKEY); save(); render(); toast('تمت إعادة التهيئة'); }),
-
-  att: d => {
-    const ex = db.attendance.find(a => a.studentId === d.sid && a.date === ui.date);
-    if (ex) ex.status = d.st; else db.attendance.push({ id: uid(), studentId: d.sid, date: ui.date, status: d.st });
-    save(); render();
-  },
-  rec: d => {
-    const sid = d.id;
-    openForm('تسميع: ' + sName(sid), [
-      { name: 'date', label: 'التاريخ', type: 'date', value: today(), required: true },
-      { name: 'type', label: 'النوع', type: 'select', options: TYPES.map(t => ({ v: t, l: t })) },
-      { name: 'surah', label: 'السورة', type: 'select', options: SURAHS.map((s, i) => ({ v: i + 1, l: `${i + 1}. ${s[0]} (${s[1]} آية)` })) },
-      { name: 'from', label: 'من آية', type: 'number', value: 1, min: 1, required: true },
-      { name: 'to', label: 'إلى آية', type: 'number', value: 1, min: 1, required: true },
-      { name: 'grade', label: 'التقدير', type: 'select', options: GRADES.map(g => ({ v: g, l: g })) },
-      { name: 'note', label: 'ملاحظة', type: 'textarea' }
-    ], v => {
-      const surah = +v.surah, from = +v.from, to = +v.to, max = SURAHS[surah - 1][1];
-      if (!(from >= 1 && to >= from)) return 'تحقق من أرقام الآيات';
-      if (to > max) return `سورة ${SURAHS[surah - 1][0]} عدد آياتها ${max}`;
-      db.records.push({ id: uid(), studentId: sid, date: v.date, type: v.type, surah, from, to, grade: v.grade, note: v.note.trim() });
-      toast('تم تسجيل التسميع');
-    });
-  }
-};
-
-document.addEventListener('click', e => {
-  const pk = e.target.closest('[data-pick]');
-  if (pk) { const g = nameGroups().find(x => x.key === pk.dataset.pick); if (g) pickUser(g); return; }
-  if (e.target.id === 'ufilter') showResults();
-  if (!e.target.closest('#ufilter, #uresults')) showResults(false);
-  const el = e.target.closest('[data-act]');
-  if (el && A[el.dataset.act]) A[el.dataset.act](el.dataset);
-  else if (el && window.Payroll?.act[el.dataset.act]) window.Payroll.act[el.dataset.act](el.dataset);
-});
-document.addEventListener('change', e => {
-  const el = e.target, c = el.dataset.change;
-  if (el.dataset.pay && window.Payroll) { window.Payroll.onChange(e); return; }
-  if (el.dataset.color) { save(); return; }
-  if (!c) return;
-  if (c === 'logo') {
-    const f = el.files[0]; el.value = '';
-    if (!f || !/^image\//.test(f.type)) { toast('اختر ملف صورة'); return; }
-    const url = URL.createObjectURL(f), img = new Image();
-    img.onload = () => {
-      const k = Math.min(1, 512 / Math.max(img.naturalWidth || 512, img.naturalHeight || 512)), cv = document.createElement('canvas');
-      cv.width = Math.max(1, Math.round((img.naturalWidth || 512) * k)); cv.height = Math.max(1, Math.round((img.naturalHeight || 512) * k));
-      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      let d = cv.toDataURL('image/webp', .9);
-      if (!d.startsWith('data:image/webp')) d = cv.toDataURL('image/png');
-      URL.revokeObjectURL(url);
-      db.settings.logo = d; save(); applyTheme(); render(); toast('تم تحديث الشعار — جرّب «استخراج الألوان من الشعار»');
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); toast('تعذّرت قراءة الصورة'); };
-    img.src = url;
-    return;
-  }
-  if (c === 'hid') { ui.hid = el.value; render(); }
-  else if (c === 'fh') { ui.fh = el.value; render(); }
-  else if (c === 'fcat') { ui.fcat = el.value; render(); }
-  else if (c === 'date') { ui.date = el.value || today(); render(); }
-  else if (c === 'import') {
-    const f = el.files[0]; if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const d = JSON.parse(rd.result);
-        if (!validBackup(d)) throw new Error('bad');
-        ask('سيتم استبدال البيانات الحالية. متابعة؟', () => { db = migrate(d); session = null; ss.del(SKEY); applyTheme(); save(); render(); toast('تم الاستيراد'); });
-      } catch (err) { toast('ملف غير صالح'); }
-    };
-    rd.readAsText(f);
-  }
-});
-A.doLogin = () => {
-  if (!ui.pick) {
-    const m = loginMatches();
-    if (m.length === 1 && document.getElementById('ufilter').value.trim()) pickUser(m[0]); else { toast('اختر اسمك من القائمة'); return; }
-  }
-  const pin = document.querySelector('#login input[name=pin]').value;
-  const p = ui.pick, cur = p.accts[p.sel];
-  /* الوضع المختار أولًا، وإن لم تطابق كلمته جُرّبت بقية حسابات الاسم نفسه */
-  const acc = cur.u.pin === pin ? cur : p.accts.find(a => a.u.pin === pin);
-  if (!pin || !acc) { toast('كلمة المرور غير صحيحة'); return; }
-  session = { role: acc.role, id: acc.u.id };
-  ss.set(SKEY, JSON.stringify(session));
-  ui.pick = null; ui.tab = null; ui.hid = ''; render();
-};
-document.addEventListener('input', e => {
-  if (e.target.dataset?.pay && window.Payroll) { window.Payroll.onInput(e); return; }
-  const ck = e.target.dataset?.color;
-  if (ck) { db.settings.theme = { ...(db.settings.theme || {}), [ck]: e.target.value }; applyTheme(); return; }
-  if (e.target.id !== 'ufilter') return;
-  ui.pick = null;
-  e.target.classList.remove('picked');
-  renderPick();
-  showResults();
-});
-/* سحب حافة الشريط الجانبي لتغيير اتساعه، والإفلات تحت الحد الأدنى يطويه */
-let sideDrag = null;
-const setSideW = w => { ui.sideW = clampW(w); const sh = document.querySelector('.shell'); sh?.style.setProperty('--side-w', ui.sideW + 'px'); document.querySelector('.side-resize')?.setAttribute('aria-valuenow', ui.sideW); };
-document.addEventListener('pointerdown', e => {
-  const h = e.target.closest?.('.side-resize'); if (!h) return;
-  e.preventDefault();
-  sideDrag = { right: document.querySelector('.side').getBoundingClientRect().right, raw: ui.sideW };
-  try { h.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-  document.body.classList.add('resizing'); document.querySelector('.shell')?.classList.add('resizing');
-});
-document.addEventListener('pointermove', e => {
-  if (!sideDrag) return;
-  sideDrag.raw = sideDrag.right - e.clientX;
-  setSideW(sideDrag.raw);
-});
-const endDrag = () => {
-  if (!sideDrag) return;
-  const raw = sideDrag.raw; sideDrag = null;
-  document.body.classList.remove('resizing'); document.querySelector('.shell')?.classList.remove('resizing');
-  if (raw < SIDE_MIN - 40) { ui.collapsed = true; ui.sideW = SIDE_W; saveUI(); render(); return; }
-  saveUI();
-};
-document.addEventListener('pointerup', endDrag);
-document.addEventListener('pointercancel', endDrag);
-document.addEventListener('dblclick', e => { if (e.target.closest?.('.side-resize')) { setSideW(SIDE_W); saveUI(); } });
-document.addEventListener('focusin', e => { if (e.target.id === 'ufilter') showResults(); });
-document.addEventListener('keydown', e => {
-  if (e.target.classList?.contains('side-resize') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-    e.preventDefault(); setSideW(ui.sideW + (e.key === 'ArrowLeft' ? 10 : -10)); saveUI(); return;
-  }
-  if (e.key === 'Escape') { showResults(false); return; }
-  if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
-  if (e.target.id === 'ufilter') {
-    const m = loginMatches();
-    if (ui.pick) document.querySelector('#login input[name=pin]')?.focus();
-    else if (m.length === 1) pickUser(m[0]);
-  }
-  else if (e.target.closest('#login')) A.doLogin();
-  else e.target.closest('.modal')?.querySelector('[data-save]')?.click();
-});
-
-/* واجهة للوحدات الإضافية (مثل المرتبات) */
-window.QL = { get db() { return db; }, get session() { return session; }, me, ICONS: TAB_ICONS, placeNames: () => (db.places || []).map(x => x.name), save, render, openForm, openInfo, ask, toast, esc, uid, today, byId, norm, empty };
-
-/* العمل بدون إنترنت: تسجيل عامل الخدمة، وشارة تظهر عند انقطاع الاتصال */
-if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => { /* بيئة لا تدعمه */ }); });
-}
-const netPill = () => {
-  let el = document.getElementById('netpill');
-  if (!el) { el = document.createElement('div'); el.id = 'netpill'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
-  const off = navigator.onLine === false;
-  el.hidden = !off;
-  el.textContent = 'بدون إنترنت — التطبيق يعمل وبياناتك محفوظة على هذا الجهاز';
-  document.body.classList.toggle('offline', off);
-};
-window.addEventListener('online', () => { netPill(); toast('عاد الاتصال بالإنترنت'); });
-window.addEventListener('offline', netPill);
-netPill();
-
-applyTheme();
-render();
-const splash = document.getElementById('splash');
-if (splash) {
-  if (session) splash.remove();
-  else setTimeout(() => { splash.classList.add('hide'); setTimeout(() => splash.remove(), 700); }, 3000);
-}
-})();
