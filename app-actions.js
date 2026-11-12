@@ -182,6 +182,7 @@ const A = {
   }),
   reset: () => wipeAll(),
   wipeAll: () => wipeAll(),
+  clsAuto: () => clsAuto(),
 
   cloudPw: d => {
     const m = byId(db[d.k] || [], d.id); if (!m) return;
@@ -240,6 +241,7 @@ document.addEventListener('change', e => {
   const el = e.target, c = el.dataset.change;
   if (el.dataset.pay && window.Payroll) { window.Payroll.onChange(e); return; }
   if (el.dataset.color) { save(); return; }
+  if (el.dataset.cls) { classifyEmp(el.dataset.cls, el.value); return; }
   if (!c) return;
   if (c === 'logo') {
     const f = el.files[0]; el.value = '';
@@ -494,6 +496,82 @@ function cloudUploadLocal() {
     withBusy(e.currentTarget, window.Cloud.push(db).then(() => toast(`تم رفع ${n} سجلًا — أنشئ حسابات الدخول من «الأعضاء»`), err => toast('تعذّر الرفع: ' + (err.message || err)))).finally(() => ov.remove());
   };
 }
+/* ============ تصنيف موظفي المرتبات ============
+   كل موظف في المرتبات يظهر في «الأعضاء ← غير مصنف» حتى يُحدَّد تصنيفه:
+   معلم / مشرف / مدير ← يُنشأ له (أو يُربط بـ) عضو بهذا النوع،
+   إداري أو مسمى آخر ← تصنيف فقط بلا حساب دخول (تُحدَّد مهامه لاحقًا).
+   التصنيف محفوظ في إعدادات المرتبات (cls: معرّف الموظف ← النوع والعضو المرتبط). */
+const CLS_ROLES = { teacher: 'معلم', supervisor: 'مشرف', admin: 'مدير' };
+const payEmps = () => db.payroll?.employees || [];
+const clsRead = () => db.payroll?.settings?.cls || {};
+const clsMap = () => { db.payroll.settings = db.payroll.settings || {}; return (db.payroll.settings.cls = db.payroll.settings.cls || {}); };
+/* التصنيف الفعّال: إن حُذف العضو المرتبط يعود الموظف «غير مصنف» */
+function clsOf(e) {
+  const c = clsRead()[e.id]; if (!c || !c.kind) return null;
+  if (CLS_ROLES[c.kind]) return byId(db[COLL[c.kind]] || [], c.memberId) ? c : null;
+  return c;
+}
+const unclassCount = () => payEmps().filter(e => !clsOf(e)).length;
+function clsSuggest(e) {
+  for (const r of ['teacher', 'supervisor', 'admin']) if ((db[COLL[r]] || []).some(m => norm(m.name) === norm(e.name))) return { kind: r, existing: true };
+  const role = e.role || '';
+  if (/مشرف/.test(role)) return { kind: 'supervisor' };
+  if (/معلم|مساعد/.test(role)) return { kind: 'teacher' };
+  if (/إداري|اداري/.test(role)) return { kind: 'إداري' };
+  return null;
+}
+function unclassView(bar) {
+  const emps = payEmps();
+  if (!emps.length) return `<div class="card">${bar}${empty('لا يوجد موظفون في المرتبات بعد. استوردهم من «المرتبات ← الموظفون» أو «إعدادات المرتبات».')}</div>`;
+  const un = emps.filter(e => !clsOf(e)), titled = emps.filter(e => { const c = clsOf(e); return c && !CLS_ROLES[c.kind]; });
+  const titles = [...new Set(['إداري', ...Object.values(clsRead()).map(c => c.kind).filter(k => k && !CLS_ROLES[k])])];
+  const opts = cur => `<option value="">— اختر التصنيف —</option>${Object.entries(CLS_ROLES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}${titles.map(t => `<option value="t:${esc(t)}" ${cur === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}<option value="__other">غير ذلك (مسمى جديد)…</option>`;
+  const lbl = k => CLS_ROLES[k] || k;
+  const sug = un.map(e => [e, clsSuggest(e)]);
+  const auto = sug.filter(([e, s]) => s && s.kind !== 'admin' && e.status !== 'متوقف').length;
+  const rows = sug.map(([e, s], i) => `<tr><td>${i + 1}</td><td>${esc(e.name)}${e.status === 'متوقف' ? ' <span class="tag">متوقف</span>' : ''}</td><td>${esc(e.role || '—')}</td><td class="muted" style="font-size:.85rem">${s ? (s.existing ? `يوجد ${lbl(s.kind)} بنفس الاسم` : `المقترح: ${esc(lbl(s.kind))}`) : ''}</td><td><select class="mini" data-cls="${esc(e.id)}" aria-label="تصنيف ${esc(e.name)}">${opts('')}</select></td></tr>`).join('');
+  const trows = titled.map(e => `<tr><td>${esc(e.name)}</td><td>${esc(e.role || '—')}</td><td><select class="mini" data-cls="${esc(e.id)}">${opts(clsOf(e).kind)}</select></td></tr>`).join('');
+  return `<div class="card">${bar}
+    <div class="note">موظفو المرتبات يظهرون هنا تلقائيًا. اختر تصنيف كل واحد: <b>معلم</b> أو <b>مشرف</b> يُنشأ له عضو بهذا النوع (أو يُربط بالموجود بنفس الاسم)، و<b>مدير</b> يأخذ صلاحيات كاملة، و<b>إداري</b> أو أي مسمى آخر تصنيف فقط بلا حساب دخول.</div>
+    ${un.length ? `<div class="bar"><span class="grow muted">${un.length} موظف بلا تصنيف</span>${auto ? `<button class="btn primary" data-act="clsAuto">تصنيف تلقائي حسب الوظيفة (${auto})</button>` : ''}</div>
+    <div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>الوظيفة في المرتبات</th><th></th><th>التصنيف</th></tr>${rows}</table></div>` : empty('كل موظفي المرتبات مصنّفون ✓')}</div>
+    ${titled.length ? `<div class="card"><h2>مصنّفون بمسميات أخرى (${titled.length})</h2><div class="tbl"><table><tr><th>الاسم</th><th>الوظيفة في المرتبات</th><th>التصنيف</th></tr>${trows}</table></div></div>` : ''}`;
+}
+function classifyEmp(id, val, quiet) {
+  const e = payEmps().find(x => x.id === id); if (!e || !val) return false;
+  if (val === '__other') {
+    render();
+    openForm('مسمى جديد لـ «' + e.name + '»', [{ name: 't', label: 'المسمى (مثل: محاسب، سكرتير، عامل)', required: true }], v => {
+      const t = v.t.trim(); if (CLS_ROLES[Object.keys(CLS_ROLES).find(k => CLS_ROLES[k] === t)]) return 'اختر هذا التصنيف من القائمة مباشرة';
+      clsMap()[id] = { kind: t }; toast(`«${e.name}»: ${t}`);
+    });
+    return false;
+  }
+  if (val.startsWith('t:')) { clsMap()[id] = { kind: val.slice(2) }; if (!quiet) { save(); render(); toast(`«${e.name}»: ${val.slice(2)}`); } return false; }
+  if (!CLS_ROLES[val]) return false;
+  const go = () => {
+    const coll = COLL[val];
+    let m = db[coll].find(x => norm(x.name) === norm(e.name));
+    const isNew = !m;
+    if (!m) { m = val === 'admin' ? { id: uid(), name: e.name, pin: genPass() } : { id: uid(), name: e.name, phone: '', pin: genPass() }; db[coll].push(m); ui.shown[m.id] = true; }
+    clsMap()[id] = { kind: val, memberId: m.id };
+    if (!quiet) { save(); render(); toast(`«${e.name}» ${isNew ? 'أُضيف' : 'رُبط'} ${CLS_ROLES[val]}${CLOUD && !m.hasLogin ? ' — أنشئ له حساب الدخول من تبويب «' + { teacher: 'المعلمون', supervisor: 'المشرفون', admin: 'المديرون' }[val] + '»' : ''}`); }
+    return isNew;
+  };
+  if (val === 'admin') { render(); ask(`سيحصل «${e.name}» على صلاحيات المدير الكاملة، بما فيها المرتبات وإدارة الحسابات. متابعة؟`, go); return false; }
+  return go();
+}
+function clsAuto() {
+  const list = payEmps().filter(e => !clsOf(e) && e.status !== 'متوقف').map(e => [e, clsSuggest(e)]).filter(([, s]) => s && s.kind !== 'admin');
+  if (!list.length) { toast('لا يوجد تصنيف مقترح'); return; }
+  const c = k => list.filter(([, s]) => s.kind === k).length;
+  ask(`تصنيف ${list.length} موظفًا حسب وظيفتهم في المرتبات: ${c('teacher')} معلم، و${c('supervisor')} مشرف، و${c('إداري')} إداري؟ لن يُصنَّف أحد «مدير» تلقائيًا، ويبقى الموظفون المتوقفون لتصنّفهم بنفسك.`, () => {
+    let n = 0;
+    list.forEach(([e, s]) => { if (CLS_ROLES[s.kind]) { if (classifyEmp(e.id, s.kind, true)) n++; } else clsMap()[e.id] = { kind: s.kind }; });
+    save(); render(); toast(`تم تصنيف ${list.length} موظفًا${n ? ` (${n} عضو جديد)` : ''}${CLOUD && n ? ' — أنشئ حسابات الدخول من تبويبات الأعضاء' : ''}`);
+  });
+}
+
 /* مسح كل البيانات: يطلب بريد المدير وكلمة مروره (أو اسمه وكلمته في الوضع المحلي) وكتابة «مسح» للتأكيد */
 function wipeAll() {
   if (session?.role !== 'admin') { toast('غير مصرح'); return; }
