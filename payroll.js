@@ -14,7 +14,8 @@ const IN = [
   ['basic', 'الأساسي', 's'], ['rate', 'سعر ساعة الإضافي', 's'], ['incentive', 'الحافز', 's'], ['transport', 'بدل الانتقال', 's']
 ];
 const GROUPS = [['h', 'الساعات'], ['a', 'الغياب (ساعات / مرات)'], ['d', 'خصومات'], ['s', 'عناصر الراتب']];
-const st = { sub: 'month', y: null, m: null, am: 0, unlocked: false };
+const st = { sub: (() => { try { return sessionStorage.getItem('halaqat_paysub') || 'month'; } catch (e) { return 'month'; } })(), y: null, m: null, am: 0, unlocked: false };
+const saveSub = () => { try { sessionStorage.setItem('halaqat_paysub', st.sub); } catch (e) { /* ignore */ } };
 /* نموذج غياب المعلمين (على غرار نموذج Google): حالته وفلتر القائمة */
 const REASONS = ['مرض', 'امتحانات', 'البلد', 'سفر', 'غير محدد'];
 const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -240,7 +241,7 @@ function prevMonthRows(y, m) {
   return monthRows(l.y, l.m);
 }
 const act = {
-  paySub: d => { st.sub = d.v; Q().render(); },
+  paySub: d => { st.sub = d.v; saveSub(); Q().render(); },
   payUnlock: () => { const v = document.getElementById('paypin')?.value; if (v === P().settings.pin) { st.unlocked = true; Q().render(); } else Q().toast('الرمز غير صحيح'); },
   payOpenMonth: d => { st.y = +d.y; st.m = +d.m; st.sub = 'month'; Q().render(); },
   payOpenYear: d => { st.y = +d.y; st.sub = 'year'; Q().render(); },
@@ -260,7 +261,7 @@ const act = {
   payClose: () => Q().ask(`إغلاق شهر (${st.m}) ${st.y}؟ لن يمكن تعديله إلا بإعادة فتحه.`, () => { const p = P(), k = key(st.y, st.m); if (!p.closed.includes(k)) p.closed.push(k); Q().save(); Q().render(); }),
   payReopen: () => Q().ask('إعادة فتح الشهر للتعديل؟', () => { const p = P(); p.closed = p.closed.filter(k => k !== key(st.y, st.m)); Q().save(); Q().render(); }),
   payDelMonth: () => Q().ask(`حذف كشف شهر (${st.m}) ${st.y} بالكامل؟`, () => { const p = P(); p.rows = p.rows.filter(r => !(r.y === st.y && r.m === st.m)); Q().save(); Q().render(); }),
-  payPrint: () => window.print(),
+  payPrint: () => Q().printTable(document.querySelector('.paytbl table')),
   payAddEmp: () => empForm(null),
   payEditEmp: d => empForm(emp(d.id)),
   payDelEmp: d => {
