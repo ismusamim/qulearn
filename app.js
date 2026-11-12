@@ -326,13 +326,28 @@ function openForm(title, fields, onSave) {
     ov.remove(); save(); render();
   };
 }
+/* زر بعملية تأخذ وقتًا: أيقونة تحميل متحركة ويُقفل حتى تنتهي العملية، فلا يُضغط مرتين */
+function withBusy(el, p) {
+  if (!el || !p || typeof p.then !== 'function') return p;
+  el.classList.add('loading'); el.setAttribute('aria-busy', 'true');
+  if ('disabled' in el) el.disabled = true;
+  const done = () => { el.classList.remove('loading'); el.removeAttribute('aria-busy'); if ('disabled' in el) el.disabled = false; };
+  return Promise.resolve(p).finally(done);
+}
 function ask(msg, yes) {
   const ov = document.createElement('div');
   ov.className = 'overlay';
   ov.innerHTML = `<div class="modal"><h2>${esc(msg)}</h2><div class="row"><button type="button" class="btn danger" data-yes>تأكيد</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
   document.body.appendChild(ov);
   ov.querySelector('[data-close]').onclick = () => ov.remove();
-  ov.querySelector('[data-yes]').onclick = () => { ov.remove(); yes(); };
+  ov.querySelector('[data-yes]').onclick = e => {
+    const r = yes();
+    if (r && typeof r.then === 'function') {
+      /* عملية تأخذ وقتًا: تبقى النافذة وعلى زر التأكيد أيقونة تحميل حتى تنتهي */
+      ov.querySelector('[data-close]').disabled = true;
+      withBusy(e.currentTarget, r).finally(() => ov.remove());
+    } else ov.remove();
+  };
 }
 function openInfo(title, html) {
   const ov = document.createElement('div');
@@ -374,7 +389,7 @@ const TAB_ICONS = {
 };
 const tabIcon = k => TAB_ICONS[k] || ({ teachers: ICONS.teacher, students: ICONS.student, mine: ICONS.student, settings: ICONS.gear })[k] || TAB_ICONS.dash;
 function loginView() {
-  const none = !accounts().length;
+  const none = !CLOUD && !accounts().length;
   return `<div class="login"><div class="logo-wrap"><img src="${logoSrc()}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${logoSrc()});mask-image:url(${logoSrc()})"></div></div>
   <div class="card loginform"><div id="login">
     <div class="combo"><label>الاسم<input type="text" id="ufilter" placeholder="اكتب أول حروف اسمك" autocomplete="off"></label><div class="results" id="uresults" hidden></div></div>
