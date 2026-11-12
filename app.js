@@ -144,7 +144,7 @@ const save = () => {
 };
 
 /* ============ المظهر: الألوان والشعار ============ */
-const THEME0 = { navy: '#13294b', gold: '#b8904f', leaf: '#4e7d45', bg: '#f8f5ee', text: '#1a2333', red: '#b3372f', amber: '#b7791f' };
+const THEME0 = { navy: '#13294b', gold: '#b8904f', leaf: '#4e7d45', bg: '#f8f5ee', text: '#1a2333', red: '#b3372f', amber: '#b7791f', stripe: '#e7f2e4' };
 const THEME_KEYS = [
   ['navy', 'اللون الأساسي', 'الشريط العلوي والأزرار والعناوين'],
   ['gold', 'لون التمييز', 'الإطارات والتبويب النشط والتنبيهات'],
@@ -152,7 +152,8 @@ const THEME_KEYS = [
   ['text', 'لون النص', 'الكتابة في كل الصفحات'],
   ['leaf', 'لون «حاضر»', 'زر الحضور عند اختياره'],
   ['amber', 'لون «متأخر / معتذر»', 'أزرار التأخر والاعتذار'],
-  ['red', 'لون «غائب» والحذف', 'زر الغياب وأزرار الحذف']
+  ['red', 'لون «غائب» والحذف', 'زر الغياب وأزرار الحذف'],
+  ['stripe', 'لون الصفوف المتبادلة', 'تلوين صف وصف في الجداول']
 ];
 const PRESETS = [
   ['ألوان الشعار', THEME0],
@@ -172,7 +173,7 @@ function applyTheme() {
   const on = lum(T.navy) > .45 ? '#14181f' : '#ffffff';
   set('navy', T.navy); set('navy-d', mix(T.navy, '#000000', .35)); set('navy-l', mix(T.navy, '#ffffff', .9));
   set('gold', T.gold); set('gold-d', mix(T.gold, '#000000', .3)); set('gold-l', mix(T.gold, '#ffffff', .82));
-  set('leaf', T.leaf); set('bg', T.bg); set('text', T.text); set('red', T.red); set('amber', T.amber);
+  set('leaf', T.leaf); set('bg', T.bg); set('text', T.text); set('red', T.red); set('amber', T.amber); set('stripe', T.stripe);
   set('line', mix(T.gold, '#ffffff', .72)); set('muted', mix(T.text, '#ffffff', .4));
   set('on-navy', on); set('tab-text', mix(on, mix(T.navy, '#000000', .35), .25));
   document.querySelector('meta[name=theme-color]')?.setAttribute('content', T.navy);
@@ -411,14 +412,16 @@ function nameGroups() {
   m.forEach(g => g.accts.sort((x, y) => ROLES.indexOf(x.role) - ROLES.indexOf(y.role)));
   return [...m.values()];
 }
+/* حساب المدير لا يظهر أبدًا في قائمة الاقتراحات؛ يدخل بكتابة اسمه كاملًا ثم «دخول» */
+const noAdmin = list => list.map(g => ({ ...g, accts: g.accts.filter(a => a.role !== 'admin') })).filter(g => g.accts.length);
 function loginMatches() {
   const q = norm(document.getElementById('ufilter')?.value);
   /* لا تظهر القائمة إلا بعد كتابة حرف واحد على الأقل */
   if (!q) return [];
-  if (CLOUD) return ui.cloudGroups || [];
+  if (CLOUD) return noAdmin(ui.cloudGroups || []);
   /* الأسماء التي تبدأ بالحروف المكتوبة أولًا، ثم التي تبدأ بها إحدى كلماتها، ثم الباقي */
   const rank = k => k.startsWith(q) ? 0 : k.split(' ').some(w => w.startsWith(q)) ? 1 : 2;
-  return nameGroups().filter(g => g.key.includes(q)).sort((x, y) => rank(x.key) - rank(y.key));
+  return noAdmin(nameGroups().filter(g => g.key.includes(q))).sort((x, y) => rank(x.key) - rank(y.key));
 }
 function showResults(open = true) {
   const box = document.getElementById('uresults');
@@ -486,9 +489,9 @@ function render() {
   $app.innerHTML = `<div class="shell ${ui.nav ? 'open' : ''} ${ui.collapsed ? 'collapsed' : ''}" style="--side-w:${ui.sideW}px">
   <aside class="side">
     <div class="side-resize" role="separator" aria-orientation="vertical" aria-label="تغيير اتساع القائمة" title="اسحب لتغيير الاتساع — نقر مزدوج للاتساع الافتراضي" tabindex="0" aria-valuemin="${SIDE_MIN}" aria-valuemax="${SIDE_MAX}" aria-valuenow="${ui.sideW}"></div>
-    <div class="brand"><img class="hlogo" src="${logoSrc()}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div>
+    <div class="brand"><img class="hlogo" src="${logoSrc()}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small><button type="button" class="logout-mini" data-act="logout">${TAB_ICONS.logout}<span>خروج</span></button></div></div>
     <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}" title="${l}"><span class="ti">${tabIcon(k)}</span><span class="tl">${l}</span>${k === 'pending' && db.pending.length ? `<span class="count">${db.pending.length}</span>` : ''}</button>`).join('')}</nav>
-    <div class="side-foot">${sw}<button class="btn" data-act="logout" title="خروج">${TAB_ICONS.logout}<span class="lbl">خروج</span></button><button class="btn side-toggle" data-act="sideToggle" title="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-label="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-expanded="${!ui.collapsed}">${TAB_ICONS.fold}</button></div>
+    <div class="side-foot">${sw}<button class="btn logout-c" data-act="logout" title="خروج" aria-label="خروج">${TAB_ICONS.logout}</button><button class="btn side-toggle" data-act="sideToggle" title="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-label="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-expanded="${!ui.collapsed}">${TAB_ICONS.fold}</button></div>
   </aside>
   <div class="scrim" data-act="navClose"></div>
   <div class="content">
@@ -533,7 +536,7 @@ const adminViews = {
       <td>${CLOUD ? (m.hasLogin ? '<span class="tag tag-ok">له حساب دخول</span>' : '<span class="tag">بلا حساب</span>') : `<code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button>`}</td>
       <td>${CLOUD ? `<button class="btn sm" data-act="cloudPw" data-id="${m.id}" data-k="${kind}">${m.hasLogin ? 'كلمة جديدة' : 'إنشاء حساب'}</button>` : `<button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button>`}<button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="delMember" data-id="${m.id}" data-k="${kind}">حذف</button></td></tr>`; }).join('');
     const tip = kind === 'supervisors' ? 'حدّد حلقات كل مشرف من تبويب «الحلقات» ← تعديل ← المشرف.' : 'عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل باسمه وكلمة مروره من صفحة الدخول.';
-    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}<span class="grow"></span>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
+    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}<span class="grow"></span><button class="btn" data-act="dupOpen">الأسماء المتشابهة</button>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
     <div class="note">${CLOUD ? 'كلمات المرور محفوظة على الخادم ولا يمكن عرضها؛ تظهر مرة واحدة عند إنشاء الحساب أو تغييرها، فسلّمها لأصحابها.' : tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
     ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>${CLOUD ? 'حساب الدخول' : 'كلمة المرور'}</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
