@@ -144,6 +144,8 @@ function groups(db) {
   add('attendance', 'attendance', ['id'], (db.attendance || []).map(a => ({ id: a.id, student_id: a.studentId, date: a.date, status: a.status })), 'student_id,date');
   add('records', 'records', ['id'], (db.records || []).map(r => ({ id: r.id, student_id: r.studentId, date: r.date, type: r.type, surah: +r.surah, from_ayah: +r.from, to_ayah: +r.to, grade: r.grade || null, note: r.note || '' })));
   add('news', 'news', ['id'], (db.news || []).map(n => ({ id: n.id, text: n.text, audience: n.audience || 'all', date: n.date })));
+  /* اشتراكات الطلاب (للمدير)؛ لا تُرسل إن لم يُنشأ جدولها على الخادم بعد */
+  if (Array.isArray(db.fees) && feesOk !== false) add('fees', 'fees', ['id'], db.fees.map(f => ({ id: f.id, student_id: f.studentId, y: +f.y, m: +f.m, amount: num(f.amount) ?? 0, date: f.date || null, by_name: nz(f.by), note: f.note || '' })));
   add('custom_fields', 'custom_fields', ['kind', 'key'], ['students', 'teachers'].flatMap(k => (db.fields?.[k] || []).map(f => ({ kind: k, key: f.key, label: f.label, type: f.type || 'text' }))));
   add('pending', 'pending_columns', ['id'], (db.pending || []).map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date })));
   if (db.payroll) {
@@ -183,7 +185,7 @@ function stableUuid(s) {
 }
 function ensureUuids(db) {
   const map = new Map(), fix = o => { if (o && !isUuid(o.id)) { const n = o.id ? stableUuid(o.id) : uuid(); map.set(o.id, n); o.id = n; } };
-  ['admins', 'supervisors', 'teachers', 'students', 'places', 'halaqat', 'attendance', 'records', 'news', 'pending'].forEach(k => (db[k] || []).forEach(fix));
+  ['admins', 'supervisors', 'teachers', 'students', 'places', 'halaqat', 'attendance', 'records', 'news', 'pending', 'fees'].forEach(k => (db[k] || []).forEach(fix));
   const P = db.payroll;
   if (P) ['employees', 'rows', 'absences'].forEach(k => (P[k] || []).forEach(fix));
   if (!map.size) return false;
@@ -192,6 +194,7 @@ function ensureUuids(db) {
   (db.students || []).forEach(s => { s.halaqaId = re(s.halaqaId); });
   (db.attendance || []).forEach(a => { a.studentId = re(a.studentId); });
   (db.records || []).forEach(r => { r.studentId = re(r.studentId); });
+  (db.fees || []).forEach(f => { f.studentId = re(f.studentId); });
   (db.pending || []).forEach(p => (p.values || []).forEach(v => { v.mid = re(v.mid); }));
   if (P) { (P.rows || []).forEach(r => { r.eid = re(r.eid); }); (P.absences || []).forEach(a => { a.eid = re(a.eid); a.byMember = re(a.byMember); }); }
   return map;
@@ -208,8 +211,9 @@ function emptyDb() {
 const SYNC_TABLES = {
   settings: ['key'], places: ['id'], members: ['id'], member_admin: ['member_id'], halaqat: ['id'], attendance: ['id'],
   records: ['id'], news: ['id'], custom_fields: ['kind', 'key'], pay_settings: ['id'], pay_employees: ['id'],
-  pay_rows: ['id'], pay_closed: ['y', 'm'], absences: ['id'], pending_columns: ['id']
+  pay_rows: ['id'], pay_closed: ['y', 'm'], absences: ['id'], pending_columns: ['id'], fees: ['id']
 };
+let feesOk = null; // هل جدول الاشتراكات موجود على الخادم؟
 const MEMBER_COLS = 'id,user_id,login_email,role,name,phone,halaqa_id,cat,info,extra,has_photo';
 const FULL_EVERY = 30 * 60000;
 let raw = null, since = null, lastFull = 0, inc = null, scoped = false, lastChanged = true;
@@ -219,7 +223,7 @@ const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h 
 const pkOf = (t, r) => SYNC_TABLES[t].map(k => r[k]).join('|');
 function tablesFor(role) {
   const t = ['settings', 'places', 'members', 'member_admin', 'halaqat', 'attendance', 'records', 'news', 'custom_fields'];
-  if (role === 'admin') t.push('pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns');
+  if (role === 'admin') t.push('pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns', 'fees');
   else if (role === 'supervisor') t.push('absences');
   return t;
 }
@@ -240,7 +244,11 @@ function scopeFilter(t, chk) {
 }
 const sameSet = (a, b) => { a = a || []; b = b || []; if (a.length !== b.length) return false; const s = new Set(a); return b.every(x => s.has(x)); };
 async function fetchTables(tables, filter = '', chk = null) {
-  const got = await Promise.all(tables.map(t => selectAll(t, SYNC_TABLES[t].join(','), filter + scopeFilter(t, chk), t === 'members' && inc ? MEMBER_COLS : '*')));
+  const got = await Promise.all(tables.map(t => {
+    const p = selectAll(t, SYNC_TABLES[t].join(','), filter + scopeFilter(t, chk), t === 'members' && inc ? MEMBER_COLS : '*');
+    /* جدول الاشتراكات قد لا يكون أُنشئ بعد: لا يعطّل ذلك بقية المزامنة */
+    return t === 'fees' ? p.then(r => { feesOk = true; return r; }, () => { feesOk = false; return []; }) : p;
+  }));
   return Object.fromEntries(tables.map((t, i) => [t, got[i]]));
 }
 const backMinute = ts => new Date(new Date(ts).getTime() - 60000).toISOString();
@@ -297,6 +305,7 @@ async function pull() {
   if (role === 'admin') {
     const [ps, emps, prow, closed, abs, pend] = ['pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns'].map(rows);
     db.pending = pend.map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date }));
+    db.fees = rows('fees').map(f => ({ id: f.id, studentId: f.student_id, y: f.y, m: f.m, amount: +f.amount, date: f.date || '', by: f.by_name || '', note: f.note || '' }));
     db.payroll = {
       settings: ps[0]?.data || {},
       employees: emps.map(e => ({ id: e.id, code: e.code || '', name: e.name, role: e.role || '', sys: e.sys || '', status: e.status, basic: e.basic, rate: e.rate, incentive: e.incentive, transport: e.transport, hours: e.hours, place: e.place || '', note: e.note || '' })),
@@ -467,6 +476,7 @@ window.Cloud = {
   provision, fn, rpc, req, selectAll,
   get lastChanged() { return lastChanged; },
   get incremental() { return inc; },
+  get feesReady() { return feesOk; },
   photoOf: id => photoCache.get(id),
   /* تنزيل صور أعضاء محددين عند الحاجة (40 صورة في الطلب) */
   async loadPhotos(ids) {
