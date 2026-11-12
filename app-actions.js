@@ -612,7 +612,10 @@ function dupGroups() {
       if (seen.has(a.id)) return;
       /* الطلاب بالاسم نفسه في حلقتين مختلفتين غالبًا شخصان مختلفان، فلا يُقترح دمجهم */
       const sameHal = b => k !== 'students' || !a.halaqaId || !b.halaqaId || a.halaqaId === b.halaqaId;
-      const g = [a, ...list.slice(i + 1).filter(b => !seen.has(b.id) && sameHal(b) && dupLike(a.name, b.name))];
+      /* موظفان صُرف لكل منهما مرتب في الشهر نفسه شخصان مختلفان */
+      const pm = id => new Set((db.payroll?.rows || []).filter(r => r.eid === id).map(r => r.y * 100 + r.m));
+      const noOverlap = b => { if (k !== 'payroll') return true; const x = pm(a.id); return ![...pm(b.id)].some(v => x.has(v)); };
+      const g = [a, ...list.slice(i + 1).filter(b => !seen.has(b.id) && sameHal(b) && noOverlap(b) && dupLike(a.name, b.name))];
       if (g.length < 2) return;
       g.forEach(m => seen.add(m.id));
       const key = k + ':' + g.map(m => m.id).sort().join(',');
@@ -626,6 +629,9 @@ function dupMerge(k, keep, drop) {
   const re = (o, f) => { if (o[f] === drop.id) o[f] = keep.id; };
   if (k === 'payroll') {
     const P = db.payroll;
+    /* غياب المحذوف في يوم مسجّل فيه للباقي يُترك (لا يتكرر اليوم نفسه) */
+    const kd = new Set(P.absences.filter(a => a.eid === keep.id && a.date).map(a => a.date));
+    P.absences = P.absences.filter(a => !(a.eid === drop.id && a.date && kd.has(a.date)));
     P.rows.forEach(r => re(r, 'eid')); P.absences.forEach(a => re(a, 'eid'));
     ['role', 'sys', 'basic', 'rate', 'incentive', 'transport', 'hours', 'place', 'code'].forEach(f => { if ((keep[f] == null || keep[f] === '') && drop[f] != null && drop[f] !== '') keep[f] = drop[f]; });
     if (drop.status === 'نشط') keep.status = 'نشط';
@@ -636,9 +642,10 @@ function dupMerge(k, keep, drop) {
   if (k === 'teachers') db.halaqat.forEach(h => re(h, 'teacherId'));
   if (k === 'supervisors') db.halaqat.forEach(h => re(h, 'supervisorId'));
   if (k === 'students') {
+    /* حضور المحذوف في يوم مسجّل فيه حضور للباقي يُترك، ثم يُنقل الباقي */
+    const kd = new Set(db.attendance.filter(a => a.studentId === keep.id).map(a => a.date));
+    db.attendance = db.attendance.filter(a => !(a.studentId === drop.id && kd.has(a.date)));
     db.attendance.forEach(a => re(a, 'studentId')); db.records.forEach(r => re(r, 'studentId'));
-    /* حضور مكرر لنفس اليوم بعد الدمج: يبقى الأول */
-    const seen = new Set(); db.attendance = db.attendance.filter(a => { const x = a.studentId + '|' + a.date; if (seen.has(x)) return false; seen.add(x); return true; });
     if (!keep.halaqaId && drop.halaqaId) keep.halaqaId = drop.halaqaId;
     keep.info = { ...(drop.info || {}), ...(keep.info || {}) };
   }
