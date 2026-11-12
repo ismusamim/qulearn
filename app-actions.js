@@ -5,6 +5,17 @@ const PASS_PREFIX = { teacher: 'tech', teachers: 'tech', admin: 'mang', admins: 
 const PASS_RE = /^(tech|mang|stud|supe)\d{6}$/;
 const genPassK = kind => (PASS_PREFIX[kind] || 'user') + genPass();
 TAB_ICONS.print = svg('<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>');
+/* إعادة الرسم تحفظ موضع التمرير داخل الجداول: إن رُسم الجدول نفسه (نفس رأسه) يعود إلى موضعه بدل القفز للأعلى */
+const renderBase = render;
+render = function () {
+  const keep = [...document.querySelectorAll('main .tbl')].map(t => [t.querySelector('tr')?.textContent || '', t.scrollTop, t.scrollLeft]);
+  renderBase();
+  if (!keep.length) return;
+  document.querySelectorAll('main .tbl').forEach((t, i) => {
+    const k = keep[i];
+    if (k && (k[1] || k[2]) && (t.querySelector('tr')?.textContent || '') === k[0]) { t.scrollTop = k[1]; t.scrollLeft = k[2]; }
+  });
+};
 /* ============ الإجراءات ============ */
 const A = {
   lmode: d => { if (!ui.pick) return; ui.pick.sel = +d.i; renderPick(); document.querySelector('#login input[name=pin]')?.focus(); },
@@ -404,17 +415,28 @@ async function cloudRefresh(force = false, loud = false, wait = false) {
   ui.refreshing = true;
   try {
     try { await window.Cloud.push(db); } catch (e) { /* يعالَج في onReject */ }
-    const nd = await window.Cloud.pull();
-    db = migrate(nd);
+    const nd = migrate(await window.Cloud.pull());
+    /* لا تُعاد رسم الصفحة إن لم تتغير البيانات (المزامنة التلقائية كل دقيقتين وعند العودة للنافذة) */
+    const changed = dataSig(nd) !== dataSig(db);
+    db = nd;
     if (!me()) { toast('لم يعد هذا الحساب موجودًا'); A.logout(); return; }
-    applyTheme();
-    if (!document.querySelector('.overlay')) { const y = window.scrollY; render(); window.scrollTo(0, y); }
+    if (changed) applyTheme();
+    if (changed && !document.querySelector('.overlay')) { const y = window.scrollY; render(); window.scrollTo(0, y); }
     if (session?.role === 'admin' && installReady) setTimeout(dupOnce, 400);
     if (loud) toast('تمت المزامنة');
   } catch (err) {
     if (err?.status === 401 || !window.Cloud.signedIn) { toast('انتهت الجلسة، ادخل مرة أخرى'); A.logout(); }
     else if (loud) toast(navigator.onLine === false ? 'لا يوجد اتصال بالإنترنت' : 'تعذّرت المزامنة: ' + (err.message || err));
   } finally { ui.refreshing = false; window.netPill?.(); }
+}
+/* بصمة البيانات لا تتأثر بترتيب الحقول والصفوف: صفوف الخادم مرتبة بمفاتيحها + حالة حسابات الدخول */
+function dataSig(x) {
+  const snap = window.Cloud.snapshotOf(x);
+  /* قاعدة البيانات تعيد ترتيب حقول JSON (مثل إعدادات المرتبات)، فتُرتَّب الحقول قبل المقارنة */
+  const canon = v => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v && typeof v === 'object' ? '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v));
+  const rows = Object.keys(snap).sort().map(g => [g, Object.keys(snap[g]).sort().map(k => canon(JSON.parse(snap[g][k])))]);
+  const logins = ['admins', 'supervisors', 'teachers', 'students'].map(k => (x[k] || []).map(m => m.id + ':' + (m.hasLogin ? 1 : 0) + ':' + (m.userId || '')).sort());
+  return JSON.stringify([rows, logins]);
 }
 async function cloudUnlink(id) {
   if (!CLOUD) return;
