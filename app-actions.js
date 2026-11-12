@@ -180,7 +180,8 @@ const A = {
     if (!validBackup(d)) return 'هذا النص ليس نسخة احتياطية من التطبيق';
     db = migrate(d); session = null; ss.del(SKEY); applyTheme(); toast('تم الاستيراد — ادخل بحسابك');
   }),
-  reset: () => ask('سيتم مسح كل البيانات نهائيًا. متابعة؟', () => { db = seed(); session = null; ss.del(SKEY); save(); render(); toast('تمت إعادة التهيئة'); }),
+  reset: () => wipeAll(),
+  wipeAll: () => wipeAll(),
 
   cloudPw: d => {
     const m = byId(db[d.k] || [], d.id); if (!m) return;
@@ -436,7 +437,7 @@ function cloudCard() {
       <tr><th>المشروع</th><td dir="ltr" style="text-align:right">${esc(C.cfg.url.replace('https://', ''))}</td></tr>
     </table></div>
     <div class="bar" style="margin-top:.8rem"><button class="btn primary" data-act="cloudSync">مزامنة الآن</button><button class="btn" data-act="cloudTest">اختبار الاتصال</button>
-    ${legacy ? `<button class="btn" data-act="cloudUpload">رفع بيانات هذا الجهاز (${legacy} عضو)</button>` : ''}<button class="btn" data-act="cloudMerge">دمج نسخة احتياطية</button></div>
+    ${legacy ? `<button class="btn" data-act="cloudUpload">رفع بيانات هذا الجهاز (${legacy} عضو)</button>` : ''}<button class="btn" data-act="cloudMerge">دمج نسخة احتياطية</button><span class="grow"></span><button class="btn danger" data-act="wipeAll">مسح كل البيانات</button></div>
     <p class="muted" style="font-size:.85rem;margin:0">«رفع بيانات هذا الجهاز» يرفع ما كان محفوظًا في هذا المتصفح قبل الربط بقاعدة البيانات، مرة واحدة.</p></div>`;
 }
 /* نسخة محلية قديمة (أو احتياطية) ← بيانات قابلة للدمج */
@@ -492,6 +493,47 @@ function cloudUploadLocal() {
     const n = cloudMergeInto(migrateLocalCopy(d), skip);
     withBusy(e.currentTarget, window.Cloud.push(db).then(() => toast(`تم رفع ${n} سجلًا — أنشئ حسابات الدخول من «الأعضاء»`), err => toast('تعذّر الرفع: ' + (err.message || err)))).finally(() => ov.remove());
   };
+}
+/* مسح كل البيانات: يطلب بريد المدير وكلمة مروره (أو اسمه وكلمته في الوضع المحلي) وكتابة «مسح» للتأكيد */
+function wipeAll() {
+  if (session?.role !== 'admin') { toast('غير مصرح'); return; }
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal"><h2>مسح كل البيانات</h2>
+    <div class="note" style="color:var(--red);border-color:#e8c4c0">سيُحذف نهائيًا${CLOUD ? ' من قاعدة البيانات' : ''}: المعلمون والمشرفون والطلاب${CLOUD ? ' وحسابات دخولهم' : ''}، والأماكن والحلقات، والحضور والتسميع، والإعلانات، والمرتبات والغياب. تبقى حسابات الإداريين والمظهر. خذ «تصدير نسخة احتياطية» أولًا.</div>
+    ${CLOUD ? '<label>بريد المدير<input name="email" type="email" dir="ltr" autocomplete="off"></label>' : '<label>اسم المدير<input name="aname" autocomplete="off"></label>'}
+    <label>كلمة مرور المدير<input name="pw" type="password" autocomplete="new-password"></label>
+    <label>اكتب كلمة «مسح» للتأكيد<input name="confirm" autocomplete="off"></label>
+    <div class="row"><button type="button" class="btn danger" data-wipe>مسح نهائي</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
+  document.body.appendChild(ov);
+  const val = n => (ov.querySelector(`[name=${n}]`)?.value || '').trim();
+  ov.querySelector('[data-close]').onclick = () => ov.remove();
+  const run = async () => {
+    if (val('confirm') !== 'مسح') { toast('اكتب كلمة «مسح» للتأكيد'); return; }
+    if (!CLOUD) {
+      const a = db.admins.find(x => norm(x.name) === norm(val('aname')) && x.pin === ov.querySelector('[name=pw]').value);
+      if (!a) { toast('اسم المدير أو كلمة المرور غير صحيحة'); return; }
+      db = seed(); session = null; ss.del(SKEY); save(); ov.remove(); render(); toast('تم مسح كل البيانات');
+      return;
+    }
+    let j;
+    try { j = await window.Cloud.testSignIn(val('email'), ov.querySelector('[name=pw]').value); }
+    catch (e) { toast('البريد أو كلمة المرور غير صحيحة'); return; }
+    if (!db.admins.some(a => a.userId && a.userId === j.user?.id)) { toast('هذا الحساب ليس حساب مدير'); return; }
+    ov.querySelector('[data-close]').disabled = true;
+    /* حذف حسابات الدخول أولًا (خمسة في المرة) ثم البيانات */
+    const withLogin = [...db.supervisors, ...db.teachers, ...db.students].filter(m => m.hasLogin);
+    for (let i = 0; i < withLogin.length; i += 5) {
+      await Promise.all(withLogin.slice(i, i + 5).map(m => window.Cloud.fn({ action: 'remove', member_id: m.id }).catch(() => null)));
+      toast(`حذف حسابات الدخول: ${Math.min(i + 5, withLogin.length)} من ${withLogin.length}`);
+    }
+    Object.assign(db, { supervisors: [], teachers: [], students: [], places: [], halaqat: [], attendance: [], records: [], news: [], pending: [], fields: { students: [], teachers: [] } });
+    if (db.payroll) db.payroll = { settings: db.payroll.settings || {}, employees: [], rows: [], absences: [], closed: [] };
+    save();
+    try { await window.Cloud.push(db); } catch (e) { toast('تعذّر إكمال المسح: ' + (e.message || e)); return; }
+    ov.remove(); render(); toast('تم مسح كل البيانات');
+  };
+  const btn = ov.querySelector('[data-wipe]');
+  btn.onclick = () => { if (!btn.classList.contains('loading')) withBusy(btn, run()); };
 }
 async function cloudTest() {
   const C = window.Cloud, steps = [];
