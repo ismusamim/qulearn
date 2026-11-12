@@ -419,7 +419,7 @@ async function cloudLogin(cur, pin) {
     await window.Cloud.signIn(cur.u.email, pin);
     window.Cloud.setMember({ role: cur.role, id: cur.u.id });
     session = { role: cur.role, id: cur.u.id };
-    db = migrate(window.Cloud.cached() || window.Cloud.emptyDb());
+    db = migrate((await window.Cloud.loadLocal()) || window.Cloud.emptyDb());
     ui.pick = null; ui.tab = null; ui.hid = '';
     render();
     await cloudRefresh(true);
@@ -430,6 +430,7 @@ async function cloudLogin(cur, pin) {
 }
 /* سحب أحدث البيانات (بعد إرسال التغييرات المحلية)؛ لا يقاطع نموذجًا مفتوحًا أو حقلًا قيد الكتابة */
 async function cloudRefresh(force = false, loud = false, wait = false) {
+  await window.Cloud.ready;
   if (wait) for (let i = 0; ui.refreshing && i < 100; i++) await new Promise(r => setTimeout(r, 100));
   if (!CLOUD || !window.Cloud.signedIn || !session || ui.refreshing) return;
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && document.activeElement.closest('main');
@@ -1058,6 +1059,8 @@ if (CLOUD) {
   setInterval(() => { if (!document.hidden) cloudRefresh(); }, 120000);
   /* اسم المؤسسة والشعار في صفحة الدخول قبل تسجيل الدخول */
   window.Cloud.publicSettings().then(s => { try { localStorage.setItem('qcloud_public', JSON.stringify(s)); } catch (e) { /* ignore */ } if (!session) { db.settings = { ...db.settings, ...s }; applyTheme(); if (!document.getElementById('ufilter')?.value) render(); } }).catch(() => {});
+  /* النسخة المحفوظة على الجهاز تُقرأ أولًا (قبل أي مزامنة) ثم تُعرض */
+  window.Cloud.ready.then(d => { if (d && session && window.Cloud.signedIn) { db = migrate(d); applyTheme(); render(); } });
   if (session) setTimeout(() => cloudRefresh(true), 50);
 }
 
