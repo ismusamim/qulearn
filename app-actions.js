@@ -183,6 +183,9 @@ const A = {
   reset: () => wipeAll(),
   wipeAll: () => wipeAll(),
   clsAuto: () => clsAuto(),
+  dupOpen: () => dupDialog(true),
+  installApp: () => installApp(),
+  installClose: () => { document.getElementById('installpop')?.remove(); try { localStorage.setItem('qinstall_dismiss', String(Date.now())); } catch (e) { /* ignore */ } },
 
   cloudPw: d => {
     const m = byId(db[d.k] || [], d.id); if (!m) return;
@@ -279,8 +282,13 @@ document.addEventListener('change', e => {
 });
 A.doLogin = () => {
   if (!ui.pick) {
+    const typed = norm(document.getElementById('ufilter').value);
+    const all = CLOUD ? ui.cloudGroups || [] : nameGroups();
+    const exact = typed && all.find(g => norm(g.name) === typed);
     const m = loginMatches();
-    if (m.length === 1 && document.getElementById('ufilter').value.trim()) pickUser(m[0]); else { toast('اختر اسمك من القائمة'); return; }
+    if (exact) { const i = exact.accts.findIndex(a => a.role === 'admin'); ui.pick = { accts: exact.accts, sel: i < 0 ? 0 : i }; }
+    else if (m.length === 1 && typed) pickUser(m[0]);
+    else { toast('اختر اسمك من القائمة'); return; }
   }
   const pin = document.querySelector('#login input[name=pin]').value;
   const p = ui.pick, cur = p.accts[p.sel];
@@ -291,7 +299,16 @@ A.doLogin = () => {
   session = { role: acc.role, id: acc.u.id };
   ss.set(SKEY, JSON.stringify(session));
   ui.pick = null; ui.tab = null; ui.hid = ''; render();
+  if (session.role === 'admin') setTimeout(dupOnce, 1500);
 };
+/* كل الأرقام إنجليزية: تحويل الأرقام العربية والفارسية فور كتابتها */
+const toEnDigits = s => String(s).replace(/[٠-٩]/g, c => c.charCodeAt(0) - 1632).replace(/[۰-۹]/g, c => c.charCodeAt(0) - 1776);
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && /[٠-٩۰-۹]/.test(t.value || '')) {
+    const pos = t.selectionStart; t.value = toEnDigits(t.value); try { t.setSelectionRange(pos, pos); } catch (err) { /* ignore */ }
+  }
+}, true);
 document.addEventListener('input', e => {
   if (e.target.dataset?.pay && window.Payroll) { window.Payroll.onInput(e); return; }
   const ck = e.target.dataset?.color;
@@ -375,6 +392,7 @@ async function cloudLogin(cur, pin) {
     ui.pick = null; ui.tab = null; ui.hid = '';
     render();
     await cloudRefresh(true);
+    if (session?.role === 'admin') setTimeout(dupOnce, 1500);
   } catch (err) {
     toast(navigator.onLine === false ? 'لا يوجد اتصال بالإنترنت' : (err.message || 'تعذّر الدخول'));
   }
@@ -393,6 +411,7 @@ async function cloudRefresh(force = false, loud = false, wait = false) {
     if (!me()) { toast('لم يعد هذا الحساب موجودًا'); A.logout(); return; }
     applyTheme();
     if (!document.querySelector('.overlay')) { const y = window.scrollY; render(); window.scrollTo(0, y); }
+    if (session?.role === 'admin' && installReady) setTimeout(dupOnce, 400);
     if (loud) toast('تمت المزامنة');
   } catch (err) {
     if (err?.status === 401 || !window.Cloud.signedIn) { toast('انتهت الجلسة، ادخل مرة أخرى'); A.logout(); }
@@ -434,7 +453,7 @@ function cloudCard() {
   return `<div class="card"><h2>قاعدة البيانات</h2>
     <div class="tbl"><table>
       <tr><th style="width:38%">الحالة</th><td>${off ? '<span class="tag tag-no">بدون إنترنت</span>' : C.lastError ? `<span class="tag tag-no">خطأ: ${esc(C.lastError)}</span>` : '<span class="tag tag-ok">متصل</span>'}</td></tr>
-      <tr><th>آخر مزامنة</th><td>${C.lastSync ? esc(C.lastSync.toLocaleString('ar-EG')) : '—'}</td></tr>
+      <tr><th>آخر مزامنة</th><td dir="ltr" style="text-align:right">${C.lastSync ? esc(C.lastSync.toLocaleString('en-GB')) : '—'}</td></tr>
       <tr><th>تغييرات بانتظار الإرسال</th><td>${n}</td></tr>
       <tr><th>المشروع</th><td dir="ltr" style="text-align:right">${esc(C.cfg.url.replace('https://', ''))}</td></tr>
     </table></div>
@@ -533,7 +552,7 @@ function unclassView(bar) {
   const trows = titled.map(e => `<tr><td>${esc(e.name)}</td><td>${esc(e.role || '—')}</td><td><select class="mini" data-cls="${esc(e.id)}">${opts(clsOf(e).kind)}</select></td></tr>`).join('');
   return `<div class="card">${bar}
     <div class="note">موظفو المرتبات يظهرون هنا تلقائيًا. اختر تصنيف كل واحد: <b>معلم</b> أو <b>مشرف</b> يُنشأ له عضو بهذا النوع (أو يُربط بالموجود بنفس الاسم)، و<b>مدير</b> يأخذ صلاحيات كاملة، و<b>إداري</b> أو أي مسمى آخر تصنيف فقط بلا حساب دخول.</div>
-    ${un.length ? `<div class="bar"><span class="grow muted">${un.length} موظف بلا تصنيف</span>${auto ? `<button class="btn primary" data-act="clsAuto">تصنيف تلقائي حسب الوظيفة (${auto})</button>` : ''}</div>
+    ${un.length ? `<div class="bar"><span class="grow muted">${un.length} موظف بلا تصنيف</span><button class="btn" data-act="dupOpen">الأسماء المتشابهة</button>${auto ? `<button class="btn primary" data-act="clsAuto">تصنيف تلقائي حسب الوظيفة (${auto})</button>` : ''}</div>
     <div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>الوظيفة في المرتبات</th><th></th><th>التصنيف</th></tr>${rows}</table></div>` : empty('كل موظفي المرتبات مصنّفون ✓')}</div>
     ${titled.length ? `<div class="card"><h2>مصنّفون بمسميات أخرى (${titled.length})</h2><div class="tbl"><table><tr><th>الاسم</th><th>الوظيفة في المرتبات</th><th>التصنيف</th></tr>${trows}</table></div></div>` : ''}`;
 }
@@ -570,6 +589,117 @@ function clsAuto() {
     list.forEach(([e, s]) => { if (CLS_ROLES[s.kind]) { if (classifyEmp(e.id, s.kind, true)) n++; } else clsMap()[e.id] = { kind: s.kind }; });
     save(); render(); toast(`تم تصنيف ${list.length} موظفًا${n ? ` (${n} عضو جديد)` : ''}${CLOUD && n ? ' — أنشئ حسابات الدخول من تبويبات الأعضاء' : ''}`);
   });
+}
+
+/* ============ اقتراح دمج الأسماء المكررة ============
+   داخل كل نوع (المعلمون، المشرفون، الطلاب، موظفو المرتبات): الاسم نفسه، أو نفسه بلا مسافات (عبد الله/عبدالله)،
+   أو اسم مختصر يطابق الأول والأخير ومحتوى في الأطول (أنس حسانين ← أنس السيد حسانين).
+   «تجاهل» يحفظ المجموعة فلا تُقترح ثانية. */
+const DUP_KINDS = [['teachers', 'معلم'], ['supervisors', 'مشرف'], ['students', 'طالب'], ['payroll', 'موظف مرتبات']];
+const dupIgnored = () => db.settings.dupIgnore || [];
+function dupLike(a, b) {
+  const x = norm(a), y = norm(b);
+  if (x === y || x.replace(/\s/g, '') === y.replace(/\s/g, '')) return true;
+  const A = x.split(' '), B = y.split(' '), [s, l] = A.length <= B.length ? [A, B] : [B, A];
+  return s.length >= 2 && s.length < l.length && s[0] === l[0] && s[s.length - 1] === l[l.length - 1] && s.every(w => l.includes(w));
+}
+function dupGroups() {
+  const out = [];
+  DUP_KINDS.forEach(([k, lbl]) => {
+    const list = k === 'payroll' ? payEmps() : (db[k] || []);
+    const seen = new Set();
+    list.forEach((a, i) => {
+      if (seen.has(a.id)) return;
+      /* الطلاب بالاسم نفسه في حلقتين مختلفتين غالبًا شخصان مختلفان، فلا يُقترح دمجهم */
+      const sameHal = b => k !== 'students' || !a.halaqaId || !b.halaqaId || a.halaqaId === b.halaqaId;
+      const g = [a, ...list.slice(i + 1).filter(b => !seen.has(b.id) && sameHal(b) && dupLike(a.name, b.name))];
+      if (g.length < 2) return;
+      g.forEach(m => seen.add(m.id));
+      const key = k + ':' + g.map(m => m.id).sort().join(',');
+      if (!dupIgnored().includes(key)) out.push({ k, lbl, key, items: g });
+    });
+  });
+  return out;
+}
+/* ما يُنقل من العضو المحذوف إلى العضو الباقي */
+function dupMerge(k, keep, drop) {
+  const re = (o, f) => { if (o[f] === drop.id) o[f] = keep.id; };
+  if (k === 'payroll') {
+    const P = db.payroll;
+    P.rows.forEach(r => re(r, 'eid')); P.absences.forEach(a => re(a, 'eid'));
+    ['role', 'sys', 'basic', 'rate', 'incentive', 'transport', 'hours', 'place', 'code'].forEach(f => { if ((keep[f] == null || keep[f] === '') && drop[f] != null && drop[f] !== '') keep[f] = drop[f]; });
+    if (drop.status === 'نشط') keep.status = 'نشط';
+    const c = P.settings?.cls; if (c && c[drop.id] && !c[keep.id]) c[keep.id] = c[drop.id]; if (c) delete c[drop.id];
+    P.employees = P.employees.filter(e => e.id !== drop.id);
+    return;
+  }
+  if (k === 'teachers') db.halaqat.forEach(h => re(h, 'teacherId'));
+  if (k === 'supervisors') db.halaqat.forEach(h => re(h, 'supervisorId'));
+  if (k === 'students') {
+    db.attendance.forEach(a => re(a, 'studentId')); db.records.forEach(r => re(r, 'studentId'));
+    /* حضور مكرر لنفس اليوم بعد الدمج: يبقى الأول */
+    const seen = new Set(); db.attendance = db.attendance.filter(a => { const x = a.studentId + '|' + a.date; if (seen.has(x)) return false; seen.add(x); return true; });
+    if (!keep.halaqaId && drop.halaqaId) keep.halaqaId = drop.halaqaId;
+    keep.info = { ...(drop.info || {}), ...(keep.info || {}) };
+  }
+  if (!keep.phone && drop.phone) keep.phone = drop.phone;
+  keep.extra = { ...(drop.extra || {}), ...(keep.extra || {}) };
+  const c = db.payroll?.settings?.cls; if (c) Object.values(c).forEach(v => { if (v.memberId === drop.id) v.memberId = keep.id; });
+  db[k] = db[k].filter(m => m.id !== drop.id);
+}
+function dupDialog(manual) {
+  if (session?.role !== 'admin') return;
+  document.getElementById('dupdlg')?.remove();
+  const gs = dupGroups();
+  if (!gs.length) { if (manual) toast('لا توجد أسماء مكررة'); return; }
+  const info = (k, m) => k === 'payroll' ? [m.role, m.status === 'متوقف' ? 'متوقف' : '', P_rows(m.id) + ' شهر'].filter(Boolean).join(' · ')
+    : k === 'students' ? hName(m.halaqaId) : [db.halaqat.filter(h => h.teacherId === m.id || h.supervisorId === m.id).length + ' حلقة', m.hasLogin ? 'له حساب دخول' : ''].filter(Boolean).join(' · ');
+  const ov = document.createElement('div'); ov.className = 'overlay'; ov.id = 'dupdlg';
+  ov.innerHTML = `<div class="modal wide"><h2>أسماء متشابهة (${gs.length})</h2>
+    <p class="muted" style="margin-top:0">اختر في كل مجموعة الاسم الذي يبقى، وتُنقل إليه بيانات الباقين (الحلقات والحضور والتسميع والمرتبات) ثم يُحذفون. ألغِ تحديد «دمج» لتتركها هذه المرة، أو «تجاهل» حتى لا تُقترح ثانية.</p>
+    ${gs.map((g, gi) => `<div class="dupg" data-g="${gi}"><div class="bar" style="margin:0 0 .4rem"><b class="grow">${esc(g.lbl)}</b>
+      <label class="chk" style="margin:0"><input type="checkbox" data-merge checked> دمج</label><label class="chk" style="margin:0"><input type="checkbox" data-ignore> تجاهل</label></div>
+      ${g.items.map((m, i) => `<label class="chk dupi"><input type="radio" name="keep${gi}" value="${esc(m.id)}" ${i === 0 ? 'checked' : ''}> <span><b>${esc(m.name)}</b> <small class="muted">${esc(info(g.k, m) || '')}</small></span></label>`).join('')}</div>`).join('')}
+    <div class="row"><button type="button" class="btn primary" data-dupok>تنفيذ</button><button type="button" class="btn" data-close>لاحقًا</button></div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('[data-close]').onclick = () => ov.remove();
+  ov.addEventListener('change', e => { const b = e.target.closest('.dupg'); if (!b) return; if (e.target.matches('[data-ignore]') && e.target.checked) b.querySelector('[data-merge]').checked = false; if (e.target.matches('[data-merge]') && e.target.checked) b.querySelector('[data-ignore]').checked = false; });
+  ov.querySelector('[data-dupok]').onclick = e => withBusy(e.currentTarget, (async () => {
+    let merged = 0, ignored = 0; const unlink = [];
+    gs.forEach((g, gi) => {
+      const box = ov.querySelector(`.dupg[data-g="${gi}"]`);
+      if (box.querySelector('[data-ignore]').checked) { db.settings.dupIgnore = [...dupIgnored(), g.key]; ignored++; return; }
+      if (!box.querySelector('[data-merge]').checked) return;
+      const keepId = box.querySelector(`[name=keep${gi}]:checked`).value, keep = g.items.find(m => m.id === keepId);
+      g.items.filter(m => m.id !== keepId).forEach(d => { if (g.k !== 'payroll' && d.hasLogin) unlink.push(d.id); dupMerge(g.k, keep, d); merged++; });
+    });
+    for (const id of unlink) { try { await window.Cloud.fn({ action: 'remove', member_id: id }); } catch (err) { /* يبقى الحساب يتيمًا بلا ضرر */ } }
+    save(); ov.remove(); render();
+    toast(`تم: دمج ${merged}${ignored ? ` وتجاهل ${ignored} مجموعة` : ''}`);
+  })());
+}
+const P_rows = id => (db.payroll?.rows || []).filter(r => r.eid === id).length;
+
+/* ============ نافذة تثبيت التطبيق ============
+   شعار وتحته زر «تثبيت» بأيقونة تنزيل، تظهر بعد ثانيتين من انتهاء شاشة التحميل حين يتيح المتصفح التثبيت */
+let installEvt = null, installReady = false;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; maybeInstallPop(); });
+window.addEventListener('appinstalled', () => { installEvt = null; document.getElementById('installpop')?.remove(); });
+function maybeInstallPop() {
+  if (!installEvt || !installReady || document.getElementById('installpop')) return;
+  if (window.matchMedia?.('(display-mode: standalone)').matches) return;
+  try { const t = +localStorage.getItem('qinstall_dismiss') || 0; if (Date.now() - t < 7 * 864e5) return; } catch (e) { /* ignore */ }
+  const ov = document.createElement('div'); ov.id = 'installpop'; ov.className = 'overlay install';
+  ov.innerHTML = `<div class="ipop"><button type="button" class="ipx" data-act="installClose" aria-label="إغلاق">×</button><img src="${logoSrc()}" alt=""><button type="button" class="btn primary ibtn" data-act="installApp">${svg('<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>')}<span>تثبيت</span></button></div>`;
+  ov.addEventListener('click', e => { if (e.target === ov) A.installClose(); });
+  document.body.appendChild(ov);
+}
+async function installApp() {
+  if (!installEvt) return;
+  const ev = installEvt; installEvt = null;
+  ev.prompt();
+  try { const r = await ev.userChoice; if (r?.outcome !== 'accepted') localStorage.setItem('qinstall_dismiss', String(Date.now())); } catch (e) { /* ignore */ }
+  document.getElementById('installpop')?.remove();
 }
 
 /* مسح كل البيانات: يطلب بريد المدير وكلمة مروره (أو اسمه وكلمته في الوضع المحلي) وكتابة «مسح» للتأكيد */
@@ -663,7 +793,10 @@ netPill();
 applyTheme();
 render();
 const splash = document.getElementById('splash');
+const afterSplash = ms => setTimeout(() => { installReady = true; maybeInstallPop(); if (session?.role === 'admin') dupOnce(); }, ms);
 if (splash) {
-  if (session) splash.remove();
-  else setTimeout(() => { splash.classList.add('hide'); setTimeout(() => splash.remove(), 700); }, 3000);
-}
+  if (session) { splash.remove(); afterSplash(2000); }
+  else setTimeout(() => { splash.classList.add('hide'); setTimeout(() => splash.remove(), 700); afterSplash(2000); }, 3000);
+} else afterSplash(2000);
+/* اقتراح الدمج يظهر للمدير مرة واحدة في كل جلسة إن وُجدت أسماء مكررة */
+function dupOnce() { if (ui.dupShown || document.querySelector('.overlay')) return; ui.dupShown = true; dupDialog(false); }
