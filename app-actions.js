@@ -785,7 +785,9 @@ function tidyUi() {
   const pin = document.querySelector('#login input[name=pin][inputmode]');
   if (pin) { pin.removeAttribute('inputmode'); pin.setAttribute('autocapitalize', 'off'); pin.setAttribute('spellcheck', 'false'); pin.dir = 'ltr'; }
 }
-new MutationObserver(() => { eyeify(); addPrintButtons(); tidyUi(); freezeSoon(); }).observe(document.body, { childList: true, subtree: true });
+/* تغيّر نص فقط (مثل كتابة رقم في كشف المرتبات وتحديث الإجمالي) لا يحتاج إعادة تجهيز الصفحة؛ نعمل فقط عند إضافة عناصر جديدة */
+const addsElements = m => [...m.addedNodes].some(n => n.nodeType === 1);
+new MutationObserver(ms => { if (!ms.some(addsElements)) return; eyeify(); addPrintButtons(); tidyUi(); freezeSoon(); }).observe(document.body, { childList: true, subtree: true });
 /* تثبيت رأس الجدول وأعمدة المسلسل والاسم أثناء التمرير */
 let frzRaf = 0;
 const freezeSoon = () => { cancelAnimationFrame(frzRaf); frzRaf = requestAnimationFrame(freezeTables); };
@@ -795,6 +797,10 @@ function freezeTables() {
   document.querySelectorAll('main .tbl table').forEach(tbl => {
     const { rows, grid, H } = tableGrid(tbl);
     if (!H || H >= rows.length) return;
+    /* لا يُعاد التثبيت إن لم يتغير شكل الجدول (عدد الصفوف وعرض الأعمدة) */
+    const sig = rows.length + ':' + (grid[H] || []).map(x => x?.td.offsetWidth).join(',') + ':' + rows.slice(0, H).map(r => r.offsetHeight).join(',');
+    if (tbl._frz === sig) return;
+    tbl._frz = sig;
     tbl.classList.add('frz');
     /* الأعمدة الثابتة: المسلسل/التحديد في البداية ثم عمود الاسم */
     let n = 0; while (n < 3 && grid[0][n] && LEAD.has(grid[0][n].td.textContent.trim())) n++;
