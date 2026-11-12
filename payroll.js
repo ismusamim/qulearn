@@ -168,7 +168,7 @@ function absView() {
   const form = !emps.length ? `<div class="card">${empty(isAdmin ? 'لا يوجد معلمون في سجل الموظفين. أضفهم من «المرتبات ← الموظفون».' : 'لا يوجد معلمون مسجلون بعد. تواصل مع الإدارة.')}</div>` : `
   <div class="card absform" id="absform"><h2>تسجيل غياب معلم</h2>
     <fieldset class="tfs"><legend>بيانات الغياب</legend>
-      <label>اسم المعلم <b class="req">*</b><select name="eid" data-pay="absEmp"><option value="">— اختر —</option>${emps.map(e => `<option value="${esc(e.id)}" ${D.eid === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label>
+      <div class="combo"><label>اسم المعلم <b class="req">*</b><input name="ename" data-pay="absEmpQ" value="${esc(emp(D.eid)?.name || D.ename || '')}" placeholder="اكتب جزءًا من الاسم واختر من القائمة" autocomplete="off"></label><input type="hidden" name="eid" value="${esc(D.eid || '')}"><div class="results" id="absEmpRes" hidden></div></div>
       <div class="two"><label>اليوم <b class="req">*</b><input type="date" name="date" value="${esc(D.date || today())}" data-pay="absDate"></label><label>شهر المرتب<select name="pm">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === (D.pm || dm.m) ? 'selected' : ''}>شهر (${m}) ${D.py || dm.y}</option>`).join('')}</select></label></div>
       <p class="muted daynm" style="margin:-.4rem 0 .7rem;font-size:.85rem">${esc(dayName(D.date || today()))}</p>
       <label>مكان الحلقة <b class="req">*</b><select name="place" data-pay="absPlace"><option value="">— اختر —</option>${places.map(x => `<option ${D.place === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}<option value="__other" ${D.place === '__other' ? 'selected' : ''}>مكان آخر…</option></select></label>
@@ -203,7 +203,7 @@ function absView() {
 function absRead() {
   const f = document.getElementById('absform'); if (!f) return ab.draft;
   const v = n => (f.querySelector(`[name=${n}]`)?.value ?? '').trim(), r = n => f.querySelector(`[name=${n}]:checked`)?.value || '';
-  ab.draft = { eid: v('eid'), date: v('date'), pm: +v('pm') || null, place: v('place'), placeOther: v('placeOther'), perm: r('perm'), reason: r('reason'), reasonOther: v('reasonOther'), note: v('note'), proof: v('proof') };
+  ab.draft = { eid: v('eid'), ename: v('ename'), date: v('date'), pm: +v('pm') || null, place: v('place'), placeOther: v('placeOther'), perm: r('perm'), reason: r('reason'), reasonOther: v('reasonOther'), note: v('note'), proof: v('proof') };
   return ab.draft;
 }
 
@@ -284,7 +284,7 @@ const act = {
   absSubmit: () => {
     const D = absRead(), p = P(), { toast, uid, today } = Q();
     const e = emp(D.eid);
-    if (!e) { toast('اختر اسم المعلم'); return; }
+    if (!e) { toast('اختر اسم المعلم من القائمة'); document.querySelector('#absform [name=ename]')?.focus(); return; }
     if (!D.date) { toast('حدّد اليوم'); return; }
     const place = D.place === '__other' ? D.placeOther : D.place;
     if (!place) { toast('اختر مكان الحلقة'); return; }
@@ -298,6 +298,7 @@ const act = {
     Q().save(); Q().render(); toast('تم تسجيل غياب ' + e.name);
   },
   absReset: () => { ab.draft = {}; Q().render(); },
+  absPick: d => absPick(d.id),
   absClearPerm: () => { document.querySelectorAll('#absform [name=perm]').forEach(x => { x.checked = false; }); absRead(); },
   payDelAbs: d => Q().ask('حذف سجل الغياب؟', () => { const p = P(); p.absences = p.absences.filter(a => a.id !== d.id); Q().save(); Q().render(); }),
   paySet: () => {
@@ -387,8 +388,35 @@ function refreshRow(r) {
   const tot = monthRows(r.y, r.m).reduce((a, x) => a + calc(x).net, 0);
   document.querySelectorAll('[data-pay-total]').forEach(el => { el.textContent = fmt(tot); });
 }
+/* البحث بالكتابة في اسم المعلم (يتجاهل الهمزات والتشكيل) */
+function absEmpList() { return P().employees.filter(e => e.status !== 'متوقف'); }
+function absShow(q) {
+  const box = document.getElementById('absEmpRes'); if (!box) return;
+  const { norm, esc } = Q(), k = norm(q);
+  const rank = n => (n.startsWith(k) ? 0 : n.split(' ').some(w => w.startsWith(k)) ? 1 : 2);
+  const list = absEmpList().filter(e => !k || norm(e.name).includes(k)).sort((a, b) => rank(norm(a.name)) - rank(norm(b.name)) || a.name.localeCompare(b.name, 'ar'));
+  box.innerHTML = list.length ? list.map(e => `<button type="button" class="opt" data-act="absPick" data-id="${esc(e.id)}">${esc(e.name)}</button>`).join('') : '<div class="muted" style="padding:.6rem .8rem">لا يوجد اسم مطابق</div>';
+  box.hidden = false;
+}
+function absPick(id) {
+  const f = document.getElementById('absform'), e = emp(id); if (!f || !e) return;
+  f.querySelector('[name=ename]').value = e.name; f.querySelector('[name=eid]').value = e.id;
+  document.getElementById('absEmpRes').hidden = true;
+  const s = f.querySelector('[name=place]');
+  if (e.place && [...s.options].some(o => o.value === e.place)) s.value = e.place;
+  absRead();
+}
+document.addEventListener('focusin', e => { if (e.target.dataset?.pay === 'absEmpQ') absShow(e.target.value); });
+document.addEventListener('click', e => { const b = document.getElementById('absEmpRes'); if (b && !b.hidden && !e.target.closest('#absform .combo')) b.hidden = true; });
+document.addEventListener('keydown', e => {
+  if (e.target.dataset?.pay !== 'absEmpQ') return;
+  const b = document.getElementById('absEmpRes');
+  if (e.key === 'Escape' && b) b.hidden = true;
+  if (e.key === 'Enter') { e.preventDefault(); const first = b?.querySelector('.opt'); if (first) absPick(first.dataset.id); }
+});
 function onInput(e) {
   const el = e.target;
+  if (el.dataset.pay === 'absEmpQ') { const f = document.getElementById('absform'); f.querySelector('[name=eid]').value = ''; absShow(el.value); absRead(); return; }
   if (el.dataset.pay !== 'cell') return;
   const r = P().rows.find(x => x.id === el.dataset.r); if (!r || isClosed(r.y, r.m)) return;
   r[el.dataset.f] = el.value === '' ? null : +el.value;
@@ -424,6 +452,9 @@ function onChange(e) {
         d.absences = (d.absences || []).filter(a => { if (!a.date) return true; const k2 = a.eid + '|' + a.date; if (seenAbs.has(k2)) { dups.push(a); return false; } seenAbs.add(k2); return true; });
         const dupNote = dups.length ? ` (تم تجاهل ${dups.length} غياب مكرر لنفس الموظف في نفس اليوم: ${dups.map(a => `${a.name || ''} ${a.date}`).join('، ')})` : '';
         Q().ask(`استيراد ${d.employees.length} موظف و${d.rows.length} صف رواتب و${d.absences.length} يوم غياب؟ ستُستبدل بيانات المرتبات الحالية.${dupNote}`, () => {
+          /* الإبقاء على تصنيف الموظفين (معلم/مشرف/…) عند استبدال بيانات المرتبات */
+          const oldCls = Q().db.payroll?.settings?.cls;
+          if (oldCls && !d.settings?.cls) d.settings = { ...(d.settings || {}), cls: oldCls };
           Q().db.payroll = d; P(); st.y = null; st.sub = 'month'; Q().save(); Q().render(); Q().toast('تم استيراد بيانات المرتبات');
         });
       } catch (err) { Q().toast('ملف غير صالح'); }
