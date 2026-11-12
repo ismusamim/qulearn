@@ -12,7 +12,8 @@
     ['fees.amount', 'قيمة الاشتراك', 'تحديد فئة الطالب وخصمه ومبلغه وتغييرها'],
     ['notes.send', 'ملاحظات للإدارة', 'تظهر في إعلانات المدير أو المشرفين باسم صاحبها']
   ];
-  P.forEach(([key, label, desc]) => Perms.define({ key, label, desc, defaults: ['accountant'] }));
+  const G = { students: 'الحلقات والطلاب', fees: 'الاشتراكات', notes: 'الحسابات والإدارة' };
+  P.forEach(([key, label, desc]) => Perms.define({ key, label, desc, group: G[key.split('.')[0]], defaults: ['accountant'] }));
   const can = p => Perms.can(p);
   const st = { q: '', f: '' };
 
