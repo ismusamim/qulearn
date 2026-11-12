@@ -10,12 +10,32 @@ const renderBase = render;
 render = function () {
   const keep = [...document.querySelectorAll('main .tbl')].map(t => [t.querySelector('tr')?.textContent || '', t.scrollTop, t.scrollLeft]);
   renderBase();
+  queuePhotos();
   if (!keep.length) return;
   document.querySelectorAll('main .tbl').forEach((t, i) => {
     const k = keep[i];
     if (k && (k[1] || k[2]) && (t.querySelector('tr')?.textContent || '') === k[0]) { t.scrollTop = k[1]; t.scrollLeft = k[2]; }
   });
 };
+/* صور الطلاب لا تأتي مع المزامنة (توفيرًا للباقة)؛ تُنزَّل مرة في الجلسة عند ظهور قائمة فيها صور الطلاب */
+let photoBusy = false, photoFailAt = 0;
+function queuePhotos() {
+  if (!CLOUD || photoBusy || Date.now() - photoFailAt < 60000 || !document.querySelector('main .av0')) return;
+  const ids = (db.students || []).filter(s => s.hasPhoto && s.photo === undefined).map(s => s.id);
+  if (!ids.length) return;
+  photoBusy = true;
+  window.Cloud.loadPhotos(ids)
+    .then(() => { fillPhotos(); if (!document.querySelector('.overlay')) render(); })
+    .catch(() => { photoFailAt = Date.now(); })
+    .finally(() => { photoBusy = false; });
+}
+const fillPhotos = () => (db.students || []).forEach(s => { if (s.photo === undefined && window.Cloud.photoOf(s.id) !== undefined) s.photo = window.Cloud.photoOf(s.id); });
+/* قبل فتح ملف الطالب أو استمارته تُنزَّل صورته، حتى لا يمسحها الحفظ ظنًا أنه بلا صورة */
+async function withPhoto(id, fn) {
+  const s = byId(db.students, id); if (!s) return;
+  if (CLOUD && s.hasPhoto && s.photo === undefined) { try { await window.Cloud.loadPhotos([id]); fillPhotos(); } catch (e) { /* بلا اتصال: تُفتح دون الصورة ولن تُمسح */ } }
+  fn(s);
+}
 /* ============ الإجراءات ============ */
 const A = {
   lmode: d => { if (!ui.pick) return; ui.pick.sel = +d.i; renderPick(); document.querySelector('#login input[name=pin]')?.focus(); },
@@ -108,8 +128,8 @@ const A = {
   delHalaqa: d => ask('حذف الحلقة؟ سيبقى طلابها بدون حلقة.', () => { db.halaqat = db.halaqat.filter(h => h.id !== d.id); db.students.forEach(s => { if (s.halaqaId === d.id) s.halaqaId = ''; }); save(); render(); }),
 
   addStudent: () => studentForm(null),
-  editStudent: d => { document.querySelectorAll('.overlay').forEach(o => o.remove()); studentForm(byId(db.students, d.id)); },
-  studentCard: d => studentCard(byId(db.students, d.id)),
+  editStudent: d => { document.querySelectorAll('.overlay').forEach(o => o.remove()); return withPhoto(d.id, s => studentForm(s)); },
+  studentCard: d => withPhoto(d.id, s => studentCard(s)),
   printCard: () => { document.body.classList.add('print-modal'); window.print(); setTimeout(() => document.body.classList.remove('print-modal'), 500); },
   delMember: d => delMembersDialog(d.k, [d.id]),
   approvePending: d => {
@@ -166,7 +186,9 @@ const A = {
   },
   editSettings: () => openForm('الإعدادات', [{ name: 'org', label: 'اسم المؤسسة', value: db.settings.org, required: true }, { type: 'note', label: 'كلمات مرور الإداريين تُدار من تبويب «الأعضاء» ← الإداريون.' }],
     v => { db.settings.org = v.org.trim(); }),
-  export: () => {
+  export: async () => {
+    /* النسخة الاحتياطية تشمل صور الطلاب: تُنزَّل الناقصة أولًا */
+    if (CLOUD) { try { await window.Cloud.loadPhotos((db.students || []).filter(s => s.hasPhoto && s.photo === undefined).map(s => s.id)); fillPhotos(); } catch (e) { toast('تعذّر تنزيل بعض الصور؛ ستُصدَّر النسخة بدونها'); } }
     const json = JSON.stringify(db);
     try {
       const a = document.createElement('a');
@@ -412,12 +434,16 @@ async function cloudRefresh(force = false, loud = false, wait = false) {
   if (!CLOUD || !window.Cloud.signedIn || !session || ui.refreshing) return;
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && document.activeElement.closest('main');
   if (!force && (document.querySelector('.overlay') || typing)) return;
+  /* العودة للنافذة أو التبويب لا تكرر المزامنة إن تمّت قبل أقل من دقيقة، ما لم تكن هناك تغييرات تنتظر الإرسال */
+  if (!force && Date.now() - (ui.syncedAt || 0) < 60000 && !window.Cloud.pendingCount(db)) return;
   ui.refreshing = true;
   try {
     try { await window.Cloud.push(db); } catch (e) { /* يعالَج في onReject */ }
     const nd = migrate(await window.Cloud.pull());
     /* لا تُعاد رسم الصفحة إن لم تتغير البيانات (المزامنة التلقائية كل دقيقتين وعند العودة للنافذة) */
-    const changed = dataSig(nd) !== dataSig(db);
+    /* لم يأتِ من الخادم أي تغيير ← لا حاجة حتى لحساب البصمة */
+    const changed = window.Cloud.lastChanged !== false && dataSig(nd) !== dataSig(db);
+    ui.syncedAt = Date.now();
     db = nd;
     if (!me()) { toast('لم يعد هذا الحساب موجودًا'); A.logout(); return; }
     if (changed) applyTheme();
