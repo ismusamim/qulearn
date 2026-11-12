@@ -1,7 +1,7 @@
 /* عامل الخدمة: يحفظ ملفات التطبيق على الجهاز ليعمل بدون إنترنت.
    الاستراتيجية: الشبكة أولًا (حتى تصل التحديثات فور الاتصال)، ثم النسخة المحفوظة عند انقطاعها. */
 const CACHE = 'halaqat-v3';
-const CORE = ['./', './style.css', './app.js', './app-forms.js', './app-actions.js', './payroll.js', './fees.js', './perms.js', './cloud.js', './logo.png', './manifest.webmanifest'];
+const CORE = ['./', './style.css', './app.js', './app-forms.js', './app-actions.js', './payroll.js', './fees.js', './perms.js', './accountant.js', './cloud.js', './logo.png', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
