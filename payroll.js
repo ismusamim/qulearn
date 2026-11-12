@@ -89,6 +89,7 @@ const V = {
     const rows = p.employees.map(e => `<tr><td>${esc(e.code || '')}</td><td>${esc(e.name)}</td><td>${esc(e.role || '')}</td><td>${esc(e.sys || '—')}</td><td>${e.status === 'متوقف' ? '<span class="tag">متوقف</span>' : 'نشط'}</td><td>${fmt(e.basic)}</td><td>${fmt(e.rate)}</td><td>${fmt(e.incentive)}</td><td>${fmt(e.transport)}</td><td>${fmt(e.hours)}</td><td><button class="btn sm" data-act="payEditEmp" data-id="${esc(e.id)}">تعديل</button><button class="btn sm danger" data-act="payDelEmp" data-id="${esc(e.id)}">حذف</button></td></tr>`).join('');
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">موظفو المرتبات (${p.employees.length})</h2><button class="btn primary" data-act="payAddEmp">+ موظف</button></div>
       <div class="note">هذه هي الأسعار الحالية. تُنسخ إلى الشهر عند إنشائه وتبقى ثابتة فيه، فالزيادة الجديدة لا تغيّر الشهور السابقة.</div>
+      <div class="bar"><label class="btn" style="margin:0">استيراد الموظفين من ملف الرواتب (Excel)<input type="file" accept=".xlsx" data-pay="importXlsx" hidden></label><span class="muted" style="font-size:.85rem">الأسماء من شيت «خلاصة»، والتفاصيل (الوظيفة والأساسي وسعر الإضافي والحافز والبدل) من «رواتب»، ونظام العمل من «تقرير».</span></div>
       ${p.employees.length ? `<div class="tbl"><table><tr><th>الكود</th><th>الاسم</th><th>الوظيفة</th><th>نظام العمل</th><th>الحالة</th><th>الأساسي</th><th>سعر الإضافي</th><th>الحافز</th><th>البدل</th><th>الساعات</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد موظفون. أضفهم يدويًا أو استورد بيانات المرتبات من «إعدادات المرتبات».')}</div>`;
   },
   year() {
@@ -311,6 +312,73 @@ const act = {
   }
 };
 
+/* ============ الاستيراد من ملف الرواتب (Excel) ============ */
+/* يقرأ شيتات بأسمائها مع قيمها المحسوبة ومعادلاتها (سعر الإضافي داخل معادلة كل موظف) */
+async function readSheets(buf, names) {
+  const get = await unzip(buf);
+  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+  const wbx = await get('xl/workbook.xml'); if (!wbx) throw new Error('xlsx');
+  const rel = {}; for (const r of xml(await get('xl/_rels/workbook.xml.rels') || '<x/>').getElementsByTagName('Relationship')) rel[r.getAttribute('Id')] = r.getAttribute('Target');
+  const shared = [], ssx = await get('xl/sharedStrings.xml');
+  if (ssx) for (const si of xml(ssx).getElementsByTagName('si')) shared.push([...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
+  const out = {};
+  for (const sh of xml(wbx).getElementsByTagName('sheet')) {
+    const name = sh.getAttribute('name'); if (!names.includes(name)) continue;
+    const t = rel[sh.getAttribute('r:id')] || ''; const path = t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, '');
+    const sx = await get(path); if (!sx) continue;
+    const vals = {}, fs = {}, master = {}, follows = {};
+    for (const c of xml(sx).getElementsByTagName('c')) {
+      const ref = c.getAttribute('r'), tt = c.getAttribute('t'), ve = c.getElementsByTagName('v')[0];
+      let v = ve ? ve.textContent : '';
+      if (tt === 's') v = shared[+v] ?? ''; else if (tt === 'inlineStr') v = [...c.getElementsByTagName('t')].map(x => x.textContent).join('');
+      vals[ref] = v;
+      const fe = c.getElementsByTagName('f')[0]; if (!fe) continue;
+      /* المعادلة المشتركة تُكتب مرة واحدة في أول خلية وتتكرر في باقي العمود */
+      const si = fe.getAttribute('si');
+      if (fe.textContent) { fs[ref] = fe.textContent; if (si != null) master[si] = fe.textContent; }
+      else if (si != null) follows[ref] = si;
+    }
+    for (const [ref, si] of Object.entries(follows)) if (master[si]) fs[ref] = master[si];
+    out[name] = { v: ref => String(vals[ref] ?? '').trim(), f: ref => fs[ref] || '' };
+  }
+  return out;
+}
+async function importPayrollXlsx(file) {
+  const { norm, uid, toast, ask, save, render, esc } = Q(), p = P();
+  const S = await readSheets(await file.arrayBuffer(), ['خلاصة', 'رواتب', 'تقرير']);
+  const s = S['خلاصة'], r = S['رواتب'], t = S['تقرير'];
+  if (!s) { toast('لم أجد شيت «خلاصة» في هذا الملف'); return; }
+  const nn = v => (v === '' || v == null || isNaN(+v) ? null : +v);
+  const det = new Map(), sys = new Map();
+  if (r) for (let i = 3; i <= 500; i++) {
+    const n = r.v('A' + i); if (!n) continue;
+    const m = r.f('Q' + i).match(/\*\s*([\d.]+)/);
+    det.set(norm(n), { role: r.v('B' + i), hours: nn(r.v('C' + i)), basic: nn(r.v('P' + i)), rate: m ? +m[1] : null, incentive: nn(r.v('R' + i)), transport: nn(r.v('S' + i)) });
+  }
+  if (t) for (let i = 3; i <= 500; i++) { const n = t.v('A' + i), c = t.v('C' + i); if (n && /\((3|6)\)/.test(c)) sys.set(norm(n), c.includes('6') ? '(6) أيام' : '(3) أيام'); }
+  const list = [];
+  for (let i = 3; i <= 500; i++) {
+    const n = s.v('B' + i).replace(/\s+/g, ' ');
+    if (!n || isNaN(+s.v('A' + i)) || list.some(x => norm(x.name) === norm(n))) continue;
+    const d = det.get(norm(n)) || {};
+    list.push({ name: n, role: d.role || '', sys: sys.get(norm(n)) || '', hours: d.hours ?? nn(s.v('C' + i)), basic: d.basic ?? null, rate: d.rate ?? null, incentive: d.incentive ?? nn(s.v('E' + i)), transport: d.transport ?? nn(s.v('F' + i)) });
+  }
+  if (!list.length) { toast('لم أجد أسماء في شيت «خلاصة»'); return; }
+  const isNew = x => !p.employees.some(e => norm(e.name) === norm(x.name));
+  const nNew = list.filter(isNew).length, nUpd = list.length - nNew;
+  const missing = p.employees.filter(e => !list.some(x => norm(x.name) === norm(e.name)));
+  ask(`استيراد ${list.length} موظفًا من شيت «خلاصة»: ${nNew} جديد، و${nUpd} موجود ستُحدَّث بياناته.${missing.length ? ` (${missing.length} موظف في التطبيق ليس في الشيت ولن يُمَس.)` : ''}`, () => {
+    let code = p.employees.length;
+    list.forEach(x => {
+      const e = p.employees.find(y => norm(y.name) === norm(x.name));
+      const vals = Object.fromEntries(Object.entries(x).filter(([k, v]) => v !== null && v !== '' && k !== 'name'));
+      if (e) Object.assign(e, vals);
+      else p.employees.push({ id: uid(), code: 'م' + String(++code).padStart(3, '0'), name: x.name, status: 'نشط', place: '', note: '', role: 'معلم', ...vals });
+    });
+    save(); render(); toast(`تم: ${nNew} جديد و${nUpd} محدَّث`);
+  });
+}
+
 /* ============ أحداث الإدخال ============ */
 function refreshRow(r) {
   const tr = document.querySelector(`tr[data-row="${CSS.escape(r.id)}"]`); if (!tr) return;
@@ -338,6 +406,12 @@ function onChange(e) {
   if (k === 'absEmp') { absRead(); const e = emp(el.value), f = document.getElementById('absform'); if (e?.place && f) { const s = f.querySelector('[name=place]'); if ([...s.options].some(o => o.value === e.place)) { s.value = e.place; absRead(); } } return; }
   if (k === 'absPlace') { absRead(); const f = document.getElementById('absform'); f.querySelector('[data-other-place]').hidden = el.value !== '__other'; return; }
   if (k === 'absDate') { absRead(); const f = document.getElementById('absform'); f.querySelector('.daynm').textContent = dayName(el.value); return; }
+  if (k === 'importXlsx') {
+    const f = el.files[0]; el.value = ''; if (!f) return;
+    const lb = el.closest('label'); lb?.classList.add('loading');
+    importPayrollXlsx(f).catch(() => Q().toast('تعذّرت قراءة الملف — تأكد أنه ملف xlsx')).finally(() => lb?.classList.remove('loading'));
+    return;
+  }
   if (k === 'import') {
     const f = el.files[0]; el.value = ''; if (!f) return;
     const rd = new FileReader();
