@@ -324,6 +324,10 @@ const ALLOWED = {
   supervisor: ['attendance', 'records', 'absences'],
   student: []
 };
+/* مقارنة لا تتأثر بترتيب الحقول: قاعدة البيانات تعيد ترتيب حقول JSON (مثل إعدادات المرتبات)،
+   فلولا هذا لظنّ التطبيق أنها تغيّرت وأعاد إرسالها مع كل مزامنة. تُستخدم فقط حين يختلف النص الظاهر. */
+const canon = v => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v && typeof v === 'object' ? '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v));
+const sameRow = (prevJ, r) => { try { return canon(JSON.parse(prevJ)) === canon(JSON.parse(JSON.stringify(r))); } catch (e) { return false; } };
 function diff(db) {
   const role = auth?.member?.role, allow = ALLOWED[role];
   const out = [];
@@ -331,7 +335,7 @@ function diff(db) {
     if (allow && !allow.includes(gr.name)) continue;
     const prev = snap?.[gr.name] || {}, cur = {};
     const up = [];
-    gr.rows.forEach(r => { const k = rowKey(gr.pk, r), j = JSON.stringify(r); cur[k] = j; if (prev[k] !== j) up.push(r); });
+    gr.rows.forEach(r => { const k = rowKey(gr.pk, r), j = JSON.stringify(r); cur[k] = j; if (prev[k] !== j && !(prev[k] && sameRow(prev[k], r))) up.push(r); });
     const del = Object.keys(prev).filter(k => !(k in cur));
     if (up.length || del.length) out.push({ ...gr, up, del, cur });
   }
