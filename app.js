@@ -7,13 +7,18 @@ const SURAHS = [["الفاتحة",7],["البقرة",286],["آل عمران",200
 const GRADES = ['ممتاز', 'جيد جدًا', 'جيد', 'مقبول', 'يعاد'];
 const TYPES = ['حفظ', 'مراجعة', 'تثبيت'];
 const STATUS = { present: 'حاضر', late: 'متأخر', excused: 'معتذر', absent: 'غائب' };
+const PRAYERS = ['الفجر', 'الظهر', 'العصر', 'المغرب', 'العشاء'];
+const PLACE_TYPES = ['مسجد', 'دار تحفيظ'];
+/* استمارة التقديم: خيارات الصغار والكبار */
+const CATS = { child: 'صغير', adult: 'كبير' };
+const STUDY = ['عام', 'أزهر'], RELS = ['الأب', 'الأم', 'شخص آخر'], MARITAL = ['أعزب', 'متزوج'], QSTAT = ['طالب', 'خريج'];
 const LOGO = 'logo.png';
 const KEY = 'halaqat_v1';
 const SKEY = 'halaqat_session';
 const TABS = {
-  admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['pending', 'بيانات معلّقة'], ['teachers', 'المعلمون'], ['halaqat', 'الحلقات'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['payroll', 'المرتبات'], ['settings', 'الإعدادات']],
+  admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['pending', 'بيانات معلّقة'], ['teachers', 'المعلمون'], ['halaqat', 'الأماكن والحلقات'], ['absence', 'غياب المعلمين'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['payroll', 'المرتبات'], ['settings', 'الإعدادات']],
   teacher: [['att', 'الحضور'], ['mine', 'طلابي'], ['profile', 'ملفي'], ['news', 'الإعلانات']],
-  supervisor: [['att', 'الحضور'], ['mine', 'الطلاب'], ['news', 'الإعلانات']],
+  supervisor: [['att', 'الحضور'], ['mine', 'الطلاب'], ['absence', 'غياب المعلمين'], ['news', 'الإعلانات']],
   student: [['me', 'تقدمي'], ['hist', 'السجل'], ['news', 'الإعلانات']]
 };
 /* أنواع الحسابات: كل نوع ومجموعته في قاعدة البيانات */
@@ -70,14 +75,15 @@ function toast(msg) {
 
 /* ============ البيانات ============ */
 function seed() {
-  const t1 = uid(), h1 = uid(), s1 = uid();
+  const t1 = uid(), h1 = uid(), s1 = uid(), p1 = uid();
   const names = ['عبد الله', 'محمد', 'يوسف'];
   return {
     settings: { org: 'إدارة الحلقات القرآنية' },
     admins: [{ id: uid(), name: 'المدير', pin: '1234' }],
     supervisors: [{ id: s1, name: 'المشرف خالد', phone: '', pin: '0000' }],
     teachers: [{ id: t1, name: 'الشيخ أحمد', phone: '', pin: '0000' }],
-    halaqat: [{ id: h1, name: 'حلقة الفرقان', teacherId: t1, supervisorId: s1, schedule: 'بعد صلاة العصر', place: 'المسجد الكبير' }],
+    places: [{ id: p1, name: 'المسجد الكبير', type: 'مسجد', address: '' }],
+    halaqat: [{ id: h1, teacherId: t1, supervisorId: s1, placeId: p1, time: { mode: 'prayer', fromPrayer: 'العصر', toKind: 'prayer', toPrayer: 'المغرب' } }],
     students: names.map(n => ({ id: uid(), name: n, halaqaId: h1, phone: '', pin: '0000' })),
     attendance: [], records: [], news: [],
     fields: { students: [], teachers: [] }, pending: []
@@ -92,6 +98,21 @@ function migrate(d) {
   if (!d.fields || typeof d.fields !== 'object') d.fields = {};
   ['students', 'teachers'].forEach(k => { if (!Array.isArray(d.fields[k])) d.fields[k] = []; });
   if (!Array.isArray(d.pending)) d.pending = [];
+  /* الأماكن: كانت نصًا داخل الحلقة، فصارت كيانًا مستقلًا (مسجد أو دار تحفيظ) يضم حلقات */
+  if (!Array.isArray(d.places)) {
+    d.places = [];
+    const seen = new Map();
+    (d.halaqat || []).forEach(h => {
+      const n = String(h.place || '').replace(/\s+/g, ' ').trim(); if (!n) return;
+      if (!seen.has(n)) { const pl = { id: uid(), name: n, type: /دار/.test(n) ? 'دار تحفيظ' : 'مسجد', address: '' }; seen.set(n, pl); d.places.push(pl); }
+      h.placeId = seen.get(n).id;
+    });
+  }
+  (d.halaqat || []).forEach(h => {
+    if (h.time || !h.schedule) return;
+    const m = String(h.schedule).match(/بعد\s*(?:صلاة\s*)?(الفجر|الظهر|العصر|المغرب|العشاء)/);
+    if (m) h.time = { mode: 'prayer', fromPrayer: m[1], toKind: 'prayer', toPrayer: '' };
+  });
   delete d.settings.adminPin;
   return d;
 }
@@ -187,10 +208,52 @@ function paletteFrom(img) {
 
 let session = null;
 try { session = JSON.parse(ss.get(SKEY) || 'null'); } catch (e) { /* ignore */ }
-const ui = { pick: null, tab: null, hid: '', date: today(), fh: '', psub: 'personal', msub: 'teachers', shown: {} };
+/* تفضيلات الواجهة لهذا الجهاز: اتساع الشريط الجانبي وطيّه */
+const UIKEY = 'halaqat_ui', SIDE_W = 250, SIDE_MIN = 180, SIDE_MAX = 420;
+let uiPref = {};
+try { uiPref = JSON.parse(localStorage.getItem(UIKEY) || '{}') || {}; } catch (e) { /* ignore */ }
+const saveUI = () => { try { localStorage.setItem(UIKEY, JSON.stringify({ sideW: ui.sideW, collapsed: ui.collapsed })); } catch (e) { /* ignore */ } };
+const clampW = w => Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(w) || SIDE_W));
+const ui = { fcat: '', nav: false, sideW: clampW(uiPref.sideW), collapsed: !!uiPref.collapsed, pick: null, tab: null, hid: '', date: today(), fh: '', psub: 'personal', msub: 'teachers', shown: {} };
 
 /* ============ دوال مساعدة للمجال ============ */
-const hName = id => byId(db.halaqat, id)?.name || '—';
+/* الحلقة تُسمّى باسم معلمها؛ وإن كان للمعلم أكثر من حلقة يُضاف اسم المكان للتمييز */
+const placeOf = h => h && byId(db.places || [], h.placeId);
+const placeName = h => placeOf(h)?.name || h?.place || '';
+function halaqaLabel(h) {
+  if (!h) return '—';
+  const t = byId(db.teachers, h.teacherId);
+  if (!t) return h.name || 'حلقة بلا معلم';
+  const sib = db.halaqat.filter(x => x.teacherId === h.teacherId);
+  if (sib.length < 2) return 'حلقة ' + t.name;
+  /* للمعلم أكثر من حلقة: نميّزها بالمكان، ثم بالوقت إن تكررت في المكان نفسه */
+  const samePlace = sib.filter(x => x.placeId === h.placeId).length > 1;
+  const tag = [placeName(h), samePlace ? (timeText(h) || '#' + (sib.indexOf(h) + 1)) : ''].filter(Boolean).join(' · ');
+  return 'حلقة ' + t.name + (tag ? ' — ' + tag : '');
+}
+const hName = id => halaqaLabel(byId(db.halaqat, id));
+const halaqaOpts = () => db.halaqat.map(h => ({ v: h.id, l: halaqaLabel(h) + (placeName(h) ? ' (' + placeName(h) + ')' : '') }));
+const fmtTime = t => { if (!t) return ''; const [H, M] = String(t).split(':').map(Number); return `${((H + 11) % 12) + 1}:${String(M || 0).padStart(2, '0')} ${H >= 12 ? 'م' : 'ص'}`; };
+/* رقم الهاتف: أرقام فقط، وإعادة الصفر الأول الذي يسقطه Excel من أرقام مصر */
+const normPhone = v => { let d = String(v || '').replace(/[٠-٩]/g, c => c.charCodeAt(0) - 1632).replace(/[۰-۹]/g, c => c.charCodeAt(0) - 1776).replace(/\D/g, ''); if (/^1\d{9}$/.test(d)) d = '0' + d; return d; };
+function ageOf(st) {
+  const I = st?.info || {};
+  if (st?.cat === 'adult') return I.birthYear ? new Date().getFullYear() - I.birthYear : '';
+  if (!I.birth) return '';
+  const b = new Date(I.birth), n = new Date();
+  if (isNaN(b)) return '';
+  let a = n.getFullYear() - b.getFullYear();
+  if (n.getMonth() < b.getMonth() || (n.getMonth() === b.getMonth() && n.getDate() < b.getDate())) a--;
+  return a >= 0 ? a : '';
+}
+const avatar = (st, size = 34) => st?.photo ? `<img class="av" src="${st.photo}" alt="" style="width:${size}px;height:${size}px">` : `<span class="av av0" style="width:${size}px;height:${size}px">${esc((st?.name || '؟').trim().charAt(0))}</span>`;
+function timeText(h) {
+  const w = h?.time;
+  if (!w) return h?.schedule || '';
+  if (w.mode === 'clock') return w.from && w.to ? `من ${fmtTime(w.from)} إلى ${fmtTime(w.to)}` : '';
+  const to = w.toKind === 'clock' ? (w.toTime ? ` إلى الساعة ${fmtTime(w.toTime)}` : '') : (w.toPrayer ? ` إلى صلاة ${w.toPrayer}` : '');
+  return `من بعد صلاة ${w.fromPrayer}${to}`;
+}
 const tName = id => byId(db.teachers, id)?.name || '—';
 const sName = id => byId(db.students, id)?.name || '—';
 const supName = id => byId(db.supervisors, id)?.name || '—';
@@ -269,6 +332,29 @@ const ICONS = {
   admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
 };
+/* أيقونات التبويبات في الشريط الجانبي */
+const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const TAB_ICONS = {
+  dash: svg('<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>'),
+  members: svg('<circle cx="9" cy="8" r="3.2"/><path d="M3 20v-1a6 6 0 0 1 12 0v1"/><path d="M16 4.5a3 3 0 0 1 0 6M21 20v-1a5 5 0 0 0-3.5-4.8"/>'),
+  pending: svg('<path d="M4 13h4l2 3h4l2-3h4"/><path d="M5.5 5h13L21 13v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z"/>'),
+  halaqat: svg('<circle cx="12" cy="12" r="2.6"/><circle cx="12" cy="4.2" r="1.7"/><circle cx="12" cy="19.8" r="1.7"/><circle cx="4.2" cy="12" r="1.7"/><circle cx="19.8" cy="12" r="1.7"/>'),
+  news: svg('<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/>'),
+  payroll: svg('<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.2"/><path d="M6 6l9-3 1.5 3"/>'),
+  att: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M9 15l2 2 4-4"/>'),
+  profile: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.3"/><path d="M5.5 16.5a3.5 3.5 0 0 1 7 0M14 10h4M14 14h3"/>'),
+  me: svg('<path d="M3 20h18"/><path d="M5 16l4-5 4 3 6-7"/><path d="M15 7h4v4"/>'),
+  hist: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  absence: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M10 13.5l4 4M14 13.5l-4 4"/>'),
+  menu: svg('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  mosque: svg('<path d="M5 21v-8a7 7 0 0 1 14 0v8"/><path d="M12 3v3"/><path d="M2 21h20"/><path d="M10 21v-4a2 2 0 0 1 4 0v4"/>'),
+  house: svg('<path d="M3 11l9-7 9 7"/><path d="M5 10v11h14V10"/><path d="M9 21v-6h6v6"/>'),
+  fold: svg('<path d="M9 6l6 6-6 6"/>'),
+  unfold: svg('<path d="M15 6l-6 6 6 6"/>'),
+  logout: svg('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4M6 12h10"/>'),
+  swap: svg('<path d="M7 7h12l-3-3M17 17H5l3 3"/>')
+};
+const tabIcon = k => TAB_ICONS[k] || ({ teachers: ICONS.teacher, students: ICONS.student, mine: ICONS.student, settings: ICONS.gear })[k] || TAB_ICONS.dash;
 function loginView() {
   const none = !accounts().length;
   return `<div class="login"><div class="logo-wrap"><img src="${logoSrc()}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${logoSrc()});mask-image:url(${logoSrc()})"></div></div>
@@ -313,16 +399,16 @@ function showResults(open = true) {
 /* المربعات الخاصة بكل وضع (للقراءة فقط، للتأكد من الهوية) */
 function acctInfo(a) {
   const box = (l, v) => `<div class="info"><small>${l}</small><b>${esc(v)}</b></div>`;
-  if (a.role === 'student') { const h = byId(db.halaqat, a.u.halaqaId); return box('الحلقة', h?.name || 'غير محدد') + box('المكان', h?.place || 'غير محدد'); }
+  if (a.role === 'student') { const h = byId(db.halaqat, a.u.halaqaId); return box('الحلقة', h ? halaqaLabel(h) : 'غير محدد') + box('المكان', placeName(h) || 'غير محدد'); }
   if (a.role === 'teacher' || a.role === 'supervisor') {
     const hs = db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id);
-    return box(a.role === 'teacher' ? 'حلقاته' : 'الحلقات المسندة', hs.map(h => h.name).join('، ') || 'لا توجد بعد') + box('عدد الطلاب', db.students.filter(s => hs.some(h => h.id === s.halaqaId)).length);
+    return box(a.role === 'teacher' ? 'حلقاته' : 'الحلقات المسندة', hs.map(halaqaLabel).join('، ') || 'لا توجد بعد') + box('عدد الطلاب', db.students.filter(s => hs.some(h => h.id === s.halaqaId)).length);
   }
   return box('الصلاحيات', 'إدارة كاملة') + box('المؤسسة', db.settings.org);
 }
 function modeLabel(a, list) {
   if (list.filter(x => x.role === a.role).length < 2) return ROLE_L[a.role];
-  const extra = a.role === 'student' ? hName(a.u.halaqaId) : a.role === 'admin' ? '' : db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id).map(h => h.name).join('، ');
+  const extra = a.role === 'student' ? hName(a.u.halaqaId) : a.role === 'admin' ? '' : db.halaqat.filter(h => (a.role === 'teacher' ? h.teacherId : h.supervisorId) === a.u.id).map(halaqaLabel).join('، ');
   return ROLE_L[a.role] + (extra && extra !== '—' ? ' – ' + extra : '');
 }
 function renderPick() {
@@ -352,10 +438,20 @@ function render() {
   const role = session.role, tabs = TABS[role];
   if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
   const who = ROLE_L[role] + ': ' + me().name;
-  const sw = sameName().length ? '<button class="btn" data-act="switchMode">تبديل الوضع</button>' : '';
-  $app.innerHTML = `<header class="top"><div class="brand"><img class="hlogo" src="${logoSrc()}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div><div class="hactions">${sw}<button class="btn" data-act="logout">خروج</button>${role === 'admin' ? `<button type="button" class="iconbtn ${ui.tab === 'settings' ? 'on' : ''}" data-act="panel" title="لوحة التحكم" aria-label="لوحة التحكم">${ICONS.gear}</button>` : ''}</div></header>
-  <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'pending' && db.pending.length ? ` <span class="count">${db.pending.length}</span>` : ''}</button>`).join('')}</nav>
-  <main>${VIEWS[role][ui.tab]()}</main>`;
+  const sw = sameName().length ? `<button class="btn" data-act="switchMode" title="تبديل الوضع">${TAB_ICONS.swap}<span class="lbl">تبديل الوضع</span></button>` : '';
+  const title = tabs.find(t => t[0] === ui.tab)[1];
+  $app.innerHTML = `<div class="shell ${ui.nav ? 'open' : ''} ${ui.collapsed ? 'collapsed' : ''}" style="--side-w:${ui.sideW}px">
+  <aside class="side">
+    <div class="side-resize" role="separator" aria-orientation="vertical" aria-label="تغيير اتساع القائمة" title="اسحب لتغيير الاتساع — نقر مزدوج للاتساع الافتراضي" tabindex="0" aria-valuemin="${SIDE_MIN}" aria-valuemax="${SIDE_MAX}" aria-valuenow="${ui.sideW}"></div>
+    <div class="brand"><img class="hlogo" src="${logoSrc()}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div>
+    <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}" title="${l}"><span class="ti">${tabIcon(k)}</span><span class="tl">${l}</span>${k === 'pending' && db.pending.length ? `<span class="count">${db.pending.length}</span>` : ''}</button>`).join('')}</nav>
+    <div class="side-foot">${sw}<button class="btn" data-act="logout" title="خروج">${TAB_ICONS.logout}<span class="lbl">خروج</span></button><button class="btn side-toggle" data-act="sideToggle" title="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-label="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-expanded="${!ui.collapsed}">${TAB_ICONS.fold}</button></div>
+  </aside>
+  <div class="scrim" data-act="navClose"></div>
+  <div class="content">
+    <header class="top"><button type="button" class="iconbtn menu" data-act="navToggle" aria-label="القائمة">${TAB_ICONS.menu}</button><h2 class="ttl">${esc(title)}</h2></header>
+    <main>${VIEWS[role][ui.tab]()}</main>
+  </div></div>`;
 }
 
 /* ============ مكونات مشتركة ============ */
@@ -365,7 +461,7 @@ function newsView(aud) {
 }
 function halaqaPicker(list) {
   if (!list.some(h => h.id === ui.hid)) ui.hid = list[0]?.id || '';
-  return `<select data-change="hid">${list.map(h => `<option value="${esc(h.id)}" ${h.id === ui.hid ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select>`;
+  return `<select data-change="hid">${list.map(h => `<option value="${esc(h.id)}" ${h.id === ui.hid ? 'selected' : ''}>${esc(halaqaLabel(h))}</option>`).join('')}</select>`;
 }
 function historyTable(sid) {
   const rs = recsOf(sid);
@@ -379,7 +475,7 @@ const adminViews = {
     const t = today(), att = db.attendance.filter(a => a.date === t);
     const ok = att.filter(a => a.status === 'present' || a.status === 'late').length;
     const week = new Date(Date.now() - 7 * 864e5), wk = `${week.getFullYear()}-${pad(week.getMonth() + 1)}-${pad(week.getDate())}`;
-    const stats = [[db.teachers.length, 'معلم'], [db.supervisors.length, 'مشرف'], [db.halaqat.length, 'حلقة'], [db.students.length, 'طالب'], [att.length ? Math.round(ok * 100 / att.length) + '%' : '—', 'حضور اليوم'], [db.records.filter(r => r.date >= wk).length, 'تسجيلات الأسبوع']];
+    const stats = [[db.teachers.length, 'معلم'], [db.supervisors.length, 'مشرف'], [db.places.length, 'مكان'], [db.halaqat.length, 'حلقة'], [db.students.length, 'طالب'], [att.length ? Math.round(ok * 100 / att.length) + '%' : '—', 'حضور اليوم'], [db.records.filter(r => r.date >= wk).length, 'تسجيلات الأسبوع']];
     return `<div class="grid">${stats.map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>${newsView('admin')}`;
   },
   members() {
@@ -417,15 +513,26 @@ const adminViews = {
     ${db.teachers.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الجوال</th><th>الحلقات</th><th></th></tr>${db.teachers.map(t => `<tr><td>${esc(t.name)}</td><td>${esc(t.phone)}</td><td>${db.halaqat.filter(h => h.teacherId === t.id).length}</td><td><button class="btn sm" data-act="editTeacher" data-id="${t.id}">تعديل</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="personal">شخصية</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="admin">إدارية</button><button class="btn sm" data-act="editProf" data-id="${t.id}" data-g="tech">فنية</button>${db.fields.teachers.length ? `<button class="btn sm" data-act="editExtra" data-k="teachers" data-id="${t.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delTeacher" data-id="${t.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد معلمون.')}</div>`;
   },
   halaqat() {
-    return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الحلقات</h2><button class="btn primary" data-act="addHalaqa">+ حلقة</button></div>
-    ${db.halaqat.length ? `<div class="tbl"><table><tr><th>الحلقة</th><th>المعلم</th><th>المشرف</th><th>الموعد</th><th>المكان</th><th>الطلاب</th><th></th></tr>${db.halaqat.map(h => `<tr><td>${esc(h.name)}</td><td>${esc(tName(h.teacherId))}</td><td>${esc(supName(h.supervisorId))}</td><td>${esc(h.schedule)}</td><td>${esc(h.place)}</td><td>${db.students.filter(s => s.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا توجد حلقات.')}</div>`;
+    const studentsIn = list => db.students.filter(st => list.some(h => h.id === st.halaqaId)).length;
+    const table = list => `<div class="tbl"><table><tr><th>الحلقة</th><th>المشرف</th><th>الوقت</th><th>الطلاب</th><th></th></tr>${list.map(h => `<tr><td><b>${esc(halaqaLabel(h))}</b>${h.teacherId ? '' : ' <span class="tag">بلا معلم</span>'}</td><td>${esc(supName(h.supervisorId))}</td><td>${esc(timeText(h) || '—')}</td><td>${db.students.filter(st => st.halaqaId === h.id).length}</td><td><button class="btn sm" data-act="editHalaqa" data-id="${h.id}">تعديل</button><button class="btn sm danger" data-act="delHalaqa" data-id="${h.id}">حذف</button></td></tr>`).join('')}</table></div>`;
+    const card = (pl, list) => `<div class="card place"><div class="bar"><span class="pico">${pl ? (pl.type === 'دار تحفيظ' ? TAB_ICONS.house : TAB_ICONS.mosque) : TAB_ICONS.halaqat}</span><h2 class="grow" style="margin:0">${esc(pl ? pl.name : 'حلقات لم يُحدَّد مكانها')} ${pl ? `<span class="tag">${esc(pl.type)}</span>` : ''}</h2><span class="muted">${list.length} حلقة · ${studentsIn(list)} طالب</span>
+      ${pl ? `<button class="btn sm primary" data-act="addHalaqa" data-p="${pl.id}">+ حلقة هنا</button><button class="btn sm" data-act="editPlace" data-id="${pl.id}">تعديل المكان</button><button class="btn sm danger" data-act="delPlace" data-id="${pl.id}">حذف</button>` : ''}</div>
+      ${pl?.address ? `<p class="muted" style="margin:-.3rem 0 .7rem">${esc(pl.address)}</p>` : ''}
+      ${list.length ? table(list) : empty('لا توجد حلقات في هذا المكان بعد.')}</div>`;
+    const orphans = db.halaqat.filter(h => !placeOf(h));
+    return `<div class="card"><div class="bar" style="margin:0"><h2 class="grow" style="margin:0">الأماكن والحلقات</h2><span class="muted">${db.places.length} مكان · ${db.halaqat.length} حلقة</span><button class="btn" data-act="addPlace">+ مكان</button><button class="btn primary" data-act="addHalaqa">+ حلقة</button></div>
+      <p class="muted" style="margin:.6rem 0 0;font-size:.88rem">كل مكان (مسجد أو دار تحفيظ) يضم حلقة أو أكثر، والحلقة تُسمّى باسم معلمها تلقائيًا.</p></div>
+      ${db.places.map(pl => card(pl, db.halaqat.filter(h => h.placeId === pl.id))).join('')}
+      ${orphans.length ? card(null, orphans) : ''}
+      ${!db.places.length && !orphans.length ? `<div class="card">${empty('ابدأ بإضافة مكان، ثم أضف حلقاته.')}</div>` : ''}`;
   },
   students() {
-    const list = db.students.filter(s => !ui.fh || s.halaqaId === ui.fh);
-    return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الطلاب</h2>
-    <select data-change="fh"><option value="">كل الحلقات</option>${db.halaqat.map(h => `<option value="${esc(h.id)}" ${h.id === ui.fh ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select>
-    <button class="btn primary" data-act="addStudent">+ طالب</button></div>
-    ${list.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الحلقة</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${list.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(hName(s.halaqaId))}</td><td>${esc(lastHifz(s.id))}</td><td>${attRate(s.id)}</td><td><button class="btn sm" data-act="hist" data-id="${s.id}">السجل</button><button class="btn sm" data-act="editStudent" data-id="${s.id}">تعديل</button>${db.fields.students.length ? `<button class="btn sm" data-act="editExtra" data-k="students" data-id="${s.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delStudent" data-id="${s.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب.')}</div>`;
+    const list = db.students.filter(st => (!ui.fh || st.halaqaId === ui.fh) && (!ui.fcat || (st.cat || 'child') === ui.fcat));
+    return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الطلاب <span class="muted" style="font-size:.9rem">(${list.length})</span></h2>
+    <select data-change="fcat"><option value="">الصغار والكبار</option>${Object.entries(CATS).map(([k, l]) => `<option value="${k}" ${ui.fcat === k ? 'selected' : ''}>${k === 'child' ? 'الصغار' : 'الكبار'}</option>`).join('')}</select>
+    <select data-change="fh"><option value="">كل الحلقات</option>${db.halaqat.map(h => `<option value="${esc(h.id)}" ${h.id === ui.fh ? 'selected' : ''}>${esc(halaqaLabel(h))}</option>`).join('')}</select>
+    <button class="btn primary" data-act="addStudent">+ استمارة طالب</button></div>
+    ${list.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الفئة</th><th>السن</th><th>الحلقة</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${list.map(st => `<tr><td><span class="who">${avatar(st)}<span>${esc(st.name)}</span></span></td><td><span class="tag ${st.cat === 'adult' ? 'tag-a' : ''}">${CATS[st.cat || 'child']}</span></td><td>${ageOf(st) === '' ? '—' : ageOf(st)}</td><td>${esc(hName(st.halaqaId))}</td><td>${esc(lastHifz(st.id))}</td><td>${attRate(st.id)}</td><td><button class="btn sm primary" data-act="studentCard" data-id="${st.id}">الملف</button><button class="btn sm" data-act="hist" data-id="${st.id}">السجل</button><button class="btn sm" data-act="editStudent" data-id="${st.id}">تعديل</button>${db.fields.students.length ? `<button class="btn sm" data-act="editExtra" data-k="students" data-id="${st.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delStudent" data-id="${st.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب.')}</div>`;
   },
   news() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الإعلانات</h2><button class="btn primary" data-act="addNews">+ إعلان</button></div>
@@ -477,7 +584,7 @@ const teacherViews = {
     if (!hs.length) return `<div class="card">${empty('لم تُسنَد إليك حلقة بعد.')}</div>`;
     const sts = db.students.filter(s => s.halaqaId === ui.hid || (!hs.some(h => h.id === ui.hid) && s.halaqaId === hs[0].id));
     return `<div class="card"><div class="bar">${halaqaPicker(hs)}</div>
-    ${sts.length ? `<div class="tbl"><table><tr><th>الطالب</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${sts.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(lastHifz(s.id))}</td><td>${attRate(s.id)}</td><td><button class="btn sm primary" data-act="rec" data-id="${s.id}">تسجيل تسميع</button><button class="btn sm" data-act="hist" data-id="${s.id}">السجل</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب في هذه الحلقة.')}</div>`;
+    ${sts.length ? `<div class="tbl"><table><tr><th>الطالب</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${sts.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(lastHifz(s.id))}</td><td>${attRate(s.id)}</td><td><button class="btn sm primary" data-act="rec" data-id="${s.id}">تسجيل تسميع</button><button class="btn sm" data-act="hist" data-id="${s.id}">السجل</button><button class="btn sm" data-act="studentCard" data-id="${s.id}">الملف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب في هذه الحلقة.')}</div>`;
   },
   profile() {
     const t = byId(db.teachers, session.id);
@@ -488,7 +595,7 @@ const teacherViews = {
     if (cur === 'extra') return `<div class="card">${bar}<div class="tbl"><table>${XF.map(f => `<tr><th style="width:38%">${esc(f.label)}</th><td>${esc((t.extra || {})[f.key] || '—')}</td></tr>`).join('')}</table></div><div class="row"><button class="btn primary" data-act="editExtra" data-k="teachers" data-id="${t.id}">تعديل البيانات الإضافية</button></div></div>`;
     const rows = G.fields.map(f => `<tr><th style="width:38%">${esc(f[1])}</th><td>${esc(pv(t, g, f[0]) || '—')}</td></tr>`).join('');
     const mine = myHalaqat();
-    const extra = g === 'admin' ? `<tr><th>الحلقات المسندة</th><td>${esc(mine.map(h => h.name).join('، ') || '—')}</td></tr><tr><th>عدد الطلاب</th><td>${db.students.filter(s => mine.some(h => h.id === s.halaqaId)).length}</td></tr>` : '';
+    const extra = g === 'admin' ? `<tr><th>الحلقات المسندة</th><td>${esc(mine.map(halaqaLabel).join('، ') || '—')}</td></tr><tr><th>عدد الطلاب</th><td>${db.students.filter(s => mine.some(h => h.id === s.halaqaId)).length}</td></tr>` : '';
     return `<div class="card">${bar}
     <div class="tbl"><table>${rows}${extra}</table></div>
     ${G.adminOnly ? '<p class="muted" style="margin-bottom:0">هذه البيانات تُدار من قِبل الإدارة، ويمكنك الاطلاع عليها فقط.</p>' : `<div class="row"><button class="btn primary" data-act="editProf" data-id="${t.id}" data-g="${g}">تعديل ${esc(G.label)}</button></div>`}</div>`;
@@ -501,7 +608,7 @@ const studentViews = {
   me() {
     const s = byId(db.students, session.id);
     const stats = [[lastHifz(s.id), 'آخر موضع حفظ'], [hifzAyat(s.id), 'آيات مسجّلة حفظًا'], [attRate(s.id), 'نسبة الحضور'], [recsOf(s.id).length, 'عدد التسميعات']];
-    return `<div class="card"><h2>أهلًا ${esc(s.name)}</h2><p class="muted" style="margin:0">الحلقة: ${esc(hName(s.halaqaId))} — المكان: ${esc(byId(db.halaqat, s.halaqaId)?.place || '—')} — المعلم: ${esc(tName(byId(db.halaqat, s.halaqaId)?.teacherId))}</p></div>
+    return `<div class="card"><h2>أهلًا ${esc(s.name)}</h2><p class="muted" style="margin:0">الحلقة: ${esc(hName(s.halaqaId))} — المكان: ${esc(placeName(byId(db.halaqat, s.halaqaId)) || '—')}${timeText(byId(db.halaqat, s.halaqaId)) ? ' — الوقت: ' + esc(timeText(byId(db.halaqat, s.halaqaId))) : ''} — المعلم: ${esc(tName(byId(db.halaqat, s.halaqaId)?.teacherId))}</p></div>
     <div class="grid">${stats.map(([n, l]) => `<div class="stat"><b style="font-size:1.2rem">${esc(n)}</b><span>${l}</span></div>`).join('')}</div>
     ${db.fields.students.some(f => (s.extra || {})[f.key]) ? `<div class="card"><h2>بياناتي</h2><div class="tbl"><table>${db.fields.students.filter(f => (s.extra || {})[f.key]).map(f => `<tr><th style="width:38%">${esc(f.label)}</th><td>${esc(s.extra[f.key])}</td></tr>`).join('')}</table></div></div>` : ''}
     <div class="card"><h2>آخر التسميعات</h2>${recsOf(s.id).slice(0, 5).map(r => `<div class="news">${esc(recLine(r))} — <b>${esc(r.grade)}</b><br><small>${esc(r.date)} ${esc(r.note)}</small></div>`).join('') || empty('لا توجد تسجيلات بعد.')}</div>`;
@@ -509,14 +616,16 @@ const studentViews = {
   hist: () => `<div class="card"><h2>سجل التسميع</h2>${historyTable(session.id)}</div>`,
   news: () => newsView('student')
 };
-const supervisorViews = { att: teacherViews.att, mine: teacherViews.mine, news: () => newsView('supervisor') };
+const absenceView = () => window.Payroll ? window.Payroll.absView() : `<div class="card">${empty('ملف payroll.js غير محمّل.')}</div>`;
+adminViews.absence = absenceView;
+const supervisorViews = { att: teacherViews.att, mine: teacherViews.mine, absence: absenceView, news: () => newsView('supervisor') };
 const VIEWS = { admin: adminViews, teacher: teacherViews, supervisor: supervisorViews, student: studentViews };
 
 /* ============ الاستيراد من Excel / CSV / Google Sheets ============ */
 const HDR = {
   name: ['الاسم', 'اسم', 'اسم الطالب', 'اسم المعلم', 'name', 'full name'],
-  halaqa: ['الحلقة', 'حلقة', 'halaqa', 'group', 'class'],
-  phone: ['الجوال', 'جوال', 'رقم الجوال', 'الهاتف', 'هاتف', 'phone', 'mobile', 'tel'],
+  halaqa: ['الحلقة', 'حلقة', 'حلقة المعلم', 'المعلم', 'halaqa', 'group', 'class'],
+  phone: ['الجوال', 'جوال', 'رقم الجوال', 'الهاتف', 'هاتف', 'رقم الهاتف', 'phone', 'mobile', 'tel'],
   pin: ['كلمة المرور', 'الرمز', 'الرمز السري', 'pin', 'password']
 };
 const hkey = s => norm(s).replace(/[\s_\-:.]/g, '');
@@ -606,19 +715,29 @@ async function fetchSheet(url) {
   return parseCSV(t);
 }
 
+/* مفاتيح مطابقة اسم الحلقة في الملفات: «حلقة فلان» أو «فلان» (اسم المعلم) أو الاسم القديم */
+const halaqaKeys = h => [halaqaLabel(h), h.name, byId(db.teachers, h.teacherId)?.name].filter(Boolean).map(norm);
+const halaqaQKeys = v => [norm(v), norm(String(v).replace(/^\s*حلقة\s+/, ''))];
+
 /* الحقول التي يمكن أن تكون «نظيرًا» لعمود في الملف المستورد */
 function fieldTargets(kind) {
   const L = [{ id: 'core:phone', label: kind === 'students' ? 'جوال ولي الأمر' : 'الجوال', syn: HDR.phone }, { id: 'core:pin', label: 'كلمة المرور', syn: HDR.pin }];
-  if (kind === 'students') L.push({ id: 'core:halaqa', label: 'الحلقة', syn: HDR.halaqa });
+  if (kind === 'students') L.push({ id: 'core:halaqa', label: 'الحلقة', syn: HDR.halaqa },
+    { id: 'info:address', label: 'العنوان', syn: ['السكن'] }, { id: 'info:birth', label: 'تاريخ الميلاد', syn: ['الميلاد'] },
+    { id: 'info:study', label: 'الدراسة', syn: ['نوع الدراسة'] }, { id: 'info:grade', label: 'الصف الدراسي', syn: ['الصف'] },
+    { id: 'info:whatsapp', label: 'واتساب', syn: ['الواتساب', 'رقم الواتساب', 'whatsapp'] },
+    { id: 'info:gName', label: 'اسم ولي الأمر', syn: ['ولي الأمر'] }, { id: 'info:gJob', label: 'وظيفة ولي الأمر', syn: [] },
+    { id: 'info:job', label: 'الوظيفة', syn: ['الوظيفة الحالية'] }, { id: 'info:qual', label: 'المؤهل الدراسي', syn: ['المؤهل'] });
   if (kind === 'teachers') Object.entries(PROF).forEach(([g, G]) => G.fields.forEach(f => { if (f[0] !== 'phone') L.push({ id: `prof:${g}:${f[0]}`, label: f[1], syn: [f[1].replace(/\s*\(.*\)\s*/, ''), ...(PROF_SYN[f[0]] || [])] }); }));
   (db.fields[kind] || []).forEach(f => L.push({ id: 'extra:' + f.key, label: f.label, syn: [] }));
   return L;
 }
 function setField(m, id, v) {
   const [t, a, b] = id.split(':');
-  if (t === 'core') { if (a === 'phone') m.phone = v; else if (a === 'pin') m.pin = v; }
+  if (t === 'core') { if (a === 'phone') m.phone = normPhone(v) || v; else if (a === 'pin') m.pin = v; }
   else if (t === 'prof') { m[a] = m[a] || {}; m[a][b] = v; }
   else if (t === 'extra') { m.extra = m.extra || {}; m.extra[a] = v; }
+  else if (t === 'info') { m.info = m.info || {}; m.info[a] = /phone|whatsapp/i.test(a) ? normPhone(v) : v; }
 }
 
 /* تحويل الجدول إلى صفوف أعضاء: الأعمدة التي لها نظير تُربط بحقلها، والباقي يُجمع لتبويب «بيانات معلّقة» */
@@ -673,8 +792,8 @@ function openImport(kind) {
   };
   function preview() {
     const fresh = parsed.filter(r => !r.dup), dups = parsed.length - fresh.length;
-    const known = new Set(db.halaqat.map(h => norm(h.name)));
-    const newH = isS ? new Set(fresh.filter(r => r.halaqa && !known.has(norm(r.halaqa))).map(r => norm(r.halaqa))) : new Set();
+    const known = new Set(db.halaqat.flatMap(halaqaKeys));
+    const newH = isS ? new Set(fresh.filter(r => r.halaqa && !halaqaQKeys(r.halaqa).some(k => known.has(k))).map(r => norm(r.halaqa))) : new Set();
     const chip = t => `<span class="chip">${esc(t)}</span>`;
     $('#imprev').innerHTML = `<p style="margin:.2rem 0 .6rem"><b>${fresh.length}</b> جاهز للاستيراد${dups ? ` — ${dups} مكرر سيُتجاهل` : ''}</p>
     ${cols.length ? `<div class="note ok">أعمدة لها نظير وستُستورد في مكانها: ${cols.map(c => chip(c.header === c.label ? c.label : `${c.header} ← ${c.label}`)).join(' ')}</div>` : ''}
@@ -721,15 +840,20 @@ function openImport(kind) {
     a.download = isS ? 'قالب-الطلاب.csv' : 'قالب-المعلمين.csv'; a.click(); URL.revokeObjectURL(a.href);
   };
   $('#imok').onclick = () => {
-    const hmap = new Map(db.halaqat.map(h => [norm(h.name), h.id]));
+    const hmap = new Map(db.halaqat.flatMap(h => halaqaKeys(h).map(k => [k, h.id])));
     let n = 0, nh = 0, np = 0;
     const made = [];
     parsed.filter(r => !r.dup).forEach(r => {
       let hid = '';
       if (isS && r.halaqa) {
-        const k = norm(r.halaqa);
-        if (hmap.has(k)) hid = hmap.get(k);
-        else if (createH) { hid = uid(); db.halaqat.push({ id: hid, name: r.halaqa, teacherId: '', schedule: '', place: '' }); hmap.set(k, hid); nh++; }
+        const k = halaqaQKeys(r.halaqa).find(x => hmap.has(x));
+        if (k) hid = hmap.get(k);
+        else if (createH) {
+          /* حلقة جديدة: إن وُجد معلم بالاسم نفسه رُبطت به فتُسمّى باسمه */
+          const t = db.teachers.find(x => halaqaQKeys(r.halaqa).includes(norm(x.name)));
+          hid = uid(); db.halaqat.push({ id: hid, name: t ? '' : (/^\s*حلقة/.test(r.halaqa) ? r.halaqa : 'حلقة ' + r.halaqa), teacherId: t ? t.id : '', supervisorId: '', placeId: '' });
+          halaqaQKeys(r.halaqa).forEach(x => hmap.set(x, hid)); nh++;
+        }
       }
       const id = uid(), given = r.vals['core:pin'], pin = given || genPass();
       const m = isS ? { id, name: r.name, halaqaId: hid, phone: '', pin } : { id, name: r.name, phone: '', pin };
@@ -744,6 +868,170 @@ function openImport(kind) {
     });
     ov.remove(); save(); render();
     toast(`تم استيراد ${n} ${isS ? 'طالب' : 'معلم'}${nh ? ` وإنشاء ${nh} حلقة` : ''}${np ? ` — ${np} عمود في «بيانات معلّقة»` : ''}`);
+  };
+}
+
+/* استمارة الطالب: حقول مشتركة، وحقول خاصة بالصغار (ولي الأمر) أو الكبار */
+function studentForm(st) {
+  const isNew = !st;
+  st = st || { id: uid(), name: '', cat: 'child', halaqaId: ui.fh || '', phone: '', pin: genPass(), info: {} };
+  const I = st.info || {}, T = I.test || {};
+  let photo = st.photo || '';
+  const v = k => esc(I[k] ?? '');
+  const sel = (name, list, val, blank) => `<select name="${name}">${blank ? `<option value="">${blank}</option>` : ''}${list.map(o => { const [ov, ol] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(ov)}" ${String(ov) === String(val ?? '') ? 'selected' : ''}>${esc(ol)}</option>`; }).join('')}</select>`;
+  const age = st.cat === 'adult' && I.birthYear ? new Date().getFullYear() - I.birthYear : '';
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal wide sform"><h2>${isNew ? 'استمارة تقديم' : 'تعديل بيانات: ' + esc(st.name)}</h2>
+    <div class="sf-top">
+      <div class="ph"><img data-ph alt="" ${photo ? `src="${photo}"` : 'hidden'}><span data-ph0 class="ph0" ${photo ? 'hidden' : ''}>${TAB_ICONS.profile}</span>
+        <div class="ph-btns"><label class="btn sm" style="margin:0">صورة<input type="file" accept="image/*" data-sfphoto hidden></label><button type="button" class="btn sm" data-sfnophoto>إزالة</button></div></div>
+      <div class="sf-main">
+        <div class="seg"><label><input type="radio" name="cat" value="child" ${st.cat !== 'adult' ? 'checked' : ''}><span>صغير — له ولي أمر</span></label><label><input type="radio" name="cat" value="adult" ${st.cat === 'adult' ? 'checked' : ''}><span>كبير</span></label></div>
+        <label><span data-c="child">اسم الطالب</span><span data-c="adult">الاسم</span><input name="name" value="${esc(st.name)}" required></label>
+      </div>
+    </div>
+    <fieldset class="tfs" data-c="child"><legend>خاص بالطالب</legend>
+      <div class="two"><label>تاريخ الميلاد<input type="date" name="birth" value="${v('birth')}"></label><label>السن<input data-agec disabled></label></div>
+      <div class="two"><label>الدراسة${sel('study', STUDY, I.study, '—')}</label><label>الصف الدراسي (وقت التقديم)<input name="grade" value="${v('grade')}"></label></div>
+    </fieldset>
+    <fieldset class="tfs" data-c="adult"><legend>بيانات</legend>
+      <div class="two"><label>السن (سنة)<input type="number" name="age" min="5" max="110" value="${age}"></label><label>الحالة الاجتماعية${sel('marital', MARITAL, I.marital, '—')}</label></div>
+      <div class="two"><label>المؤهل الدراسي<input name="qual" value="${v('qual')}"></label><label>طالب / خريج${sel('qualStatus', QSTAT, I.qualStatus, '—')}</label></div>
+      <div class="two"><label>الوظيفة الحالية<input name="job" value="${v('job')}"></label><label>الوقت المتاح للحضور<input name="avail" value="${v('avail')}"></label></div>
+    </fieldset>
+    <fieldset class="tfs"><legend>العنوان والتواصل</legend>
+      <label>العنوان<input name="address" value="${v('address')}"></label>
+      <div class="two"><label>رقم الهاتف<input type="tel" dir="ltr" name="sphone" value="${v('phone')}"></label><label>واتساب<input type="tel" dir="ltr" name="whatsapp" value="${v('whatsapp')}" placeholder="إن اختلف عن الهاتف"></label></div>
+    </fieldset>
+    <fieldset class="tfs" data-c="child"><legend>خاص بولي الأمر</legend>
+      <div class="two"><label>اسم ولي الأمر<input name="gName" value="${v('gName')}"></label><label>الوظيفة<input name="gJob" value="${v('gJob')}"></label></div>
+      <div class="two"><label>رقم الهاتف<input type="tel" dir="ltr" name="gPhone" value="${v('gPhone')}"></label><label>واتساب<input type="tel" dir="ltr" name="gWhatsapp" value="${v('gWhatsapp')}" placeholder="إن اختلف عن الهاتف"></label></div>
+      <div class="two"><label>صلة القرابة${sel('gRel', RELS, I.gRel, '—')}</label><label data-rel>حدّد صلة القرابة<input name="gRelOther" value="${v('gRelOther')}"></label></div>
+    </fieldset>
+    <fieldset class="tfs"><legend>اختبار تحديد مستوى</legend>
+      <div class="three"><label>قراءة${sel('tRead', GRADES, T.read, '—')}</label><label>تجويد${sel('tTaj', GRADES, T.tajweed, '—')}</label><label>حفظ<input name="tHifz" value="${esc(T.hifz || '')}" placeholder="مثال: جزء عم"></label></div>
+    </fieldset>
+    <fieldset class="tfs"><legend>قرار الإدارة</legend>
+      <label><span data-c="child">يلتحق الطالب بحلقة</span><span data-c="adult">يلتحق الأخ بحلقة</span>${sel('halaqaId', halaqaOpts().map(o => [o.v, o.l]), st.halaqaId, '— لم يُحدَّد بعد —')}</label>
+      <div class="three"><label>تحرر يوم<input type="date" name="joinDate" value="${v('joinDate') || (isNew ? today() : '')}"></label><label>الاشتراك الشهري (جنيه)<input type="number" min="0" name="fee" value="${v('fee')}"></label><label>كلمة المرور للدخول<input name="pin" value="${esc(st.pin)}" required dir="ltr"></label></div>
+      <label class="chk"><input type="checkbox" name="pledge" ${I.pledge ? 'checked' : ''}><span data-c="child">وقّع ولي الأمر على التنبيهات</span><span data-c="adult">وقّع المتقدم على التنبيهات</span></label>
+    </fieldset>
+    <div class="row"><button type="button" class="btn primary" data-save>حفظ</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
+  document.body.appendChild(ov);
+  const $ = q => ov.querySelector(q), val = n => (ov.querySelector(`[name=${n}]`)?.value ?? '').trim();
+  const cat = () => ov.querySelector('[name=cat]:checked').value;
+  const sync = () => {
+    ov.querySelectorAll('[data-c]').forEach(x => { x.hidden = x.dataset.c !== cat(); });
+    $('[data-rel]').hidden = cat() !== 'child' || val('gRel') !== 'شخص آخر';
+    const a = ageOf({ cat: 'child', info: { birth: val('birth') } });
+    $('[data-agec]').value = a === '' ? '' : a + ' سنة';
+  };
+  ov.addEventListener('change', sync); ov.addEventListener('input', sync); sync();
+  $('[data-sfphoto]').onchange = e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    const url = URL.createObjectURL(f), img = new Image();
+    img.onload = () => {
+      /* قص مربع من الوسط وتصغير إلى 160 بكسل حتى لا تثقل الصور ذاكرة المتصفح */
+      const S = 160, c = document.createElement('canvas'), m = Math.min(img.naturalWidth, img.naturalHeight);
+      c.width = c.height = S;
+      c.getContext('2d').drawImage(img, (img.naturalWidth - m) / 2, (img.naturalHeight - m) / 2, m, m, 0, 0, S, S);
+      let d = c.toDataURL('image/webp', .72); if (!d.startsWith('data:image/webp')) d = c.toDataURL('image/jpeg', .75);
+      URL.revokeObjectURL(url); photo = d;
+      $('[data-ph]').src = d; $('[data-ph]').hidden = false; $('[data-ph0]').hidden = true;
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast('تعذّرت قراءة الصورة'); };
+    img.src = url;
+  };
+  $('[data-sfnophoto]').onclick = () => { photo = ''; $('[data-ph]').hidden = true; $('[data-ph0]').hidden = false; };
+  $('[data-close]').onclick = () => ov.remove();
+  $('[data-save]').onclick = () => {
+    const name = val('name').replace(/\s+/g, ' ');
+    if (!name) { toast('اكتب الاسم'); return; }
+    if (!val('pin')) { toast('اكتب كلمة المرور'); return; }
+    if (db.students.some(x => x.id !== st.id && norm(x.name) === norm(name))) { toast('يوجد طالب بالاسم نفسه'); return; }
+    const c = cat(), ageN = +val('age');
+    if (c === 'adult' && val('age') && !(ageN >= 5 && ageN <= 110)) { toast('السن غير صحيح'); return; }
+    const info = { address: val('address'), phone: normPhone(val('sphone')), whatsapp: normPhone(val('whatsapp')), joinDate: val('joinDate'), fee: val('fee') === '' ? '' : +val('fee'), pledge: $('[name=pledge]').checked,
+      test: { read: val('tRead'), tajweed: val('tTaj'), hifz: val('tHifz') } };
+    if (c === 'child') Object.assign(info, { birth: val('birth'), study: val('study'), grade: val('grade'), gName: val('gName'), gJob: val('gJob'), gPhone: normPhone(val('gPhone')), gWhatsapp: normPhone(val('gWhatsapp')), gRel: val('gRel'), gRelOther: val('gRel') === 'شخص آخر' ? val('gRelOther') : '' });
+    else Object.assign(info, { birthYear: val('age') ? new Date().getFullYear() - ageN : '', marital: val('marital'), qual: val('qual'), qualStatus: val('qualStatus'), job: val('job'), avail: val('avail') });
+    Object.assign(st, { name, cat: c, halaqaId: val('halaqaId'), pin: val('pin'), photo, info: { ...(st.info || {}), ...info } });
+    /* رقم التواصل الأساسي: ولي الأمر للصغير، والطالب نفسه للكبير */
+    st.phone = c === 'child' ? (info.gPhone || info.phone || st.phone || '') : (info.phone || st.phone || '');
+    if (isNew) db.students.push(st);
+    ov.remove(); save(); render(); toast(isNew ? 'تم حفظ الاستمارة' : 'تم حفظ التعديلات');
+  };
+}
+/* ملف الطالب: عرض الاستمارة كاملة مع إمكان طباعتها */
+function studentCard(st) {
+  if (!st) return;
+  const I = st.info || {}, T = I.test || {}, child = st.cat !== 'adult', h = byId(db.halaqat, st.halaqaId);
+  const row = (l, x) => (x === '' || x == null) ? '' : `<tr><th>${l}</th><td>${esc(x)}</td></tr>`;
+  const wa = n => n ? `<a href="https://wa.me/2${esc(n)}" target="_blank" rel="noopener" dir="ltr">${esc(n)}</a>` : '';
+  const telRow = (l, p, w) => (p || w) ? `<tr><th>${l}</th><td><span dir="ltr">${esc(p || '—')}</span>${w && w !== p ? ` — واتساب ${wa(w)}` : ''}</td></tr>` : '';
+  const sec = (t, rows) => rows.trim() ? `<h3 class="sc-h">${t}</h3><div class="tbl"><table>${rows}</table></div>` : '';
+  const a = ageOf(st);
+  const html = `<div class="scard">
+    <div class="sc-head">${avatar(st, 96)}<div><h2 style="margin:0">${esc(st.name)}</h2><p class="muted" style="margin:.2rem 0 0"><span class="tag ${child ? '' : 'tag-a'}">${CATS[child ? 'child' : 'adult']}</span> ${a === '' ? '' : a + ' سنة'}</p></div></div>
+    ${sec(child ? 'خاص بالطالب' : 'بيانات', child
+      ? row('تاريخ الميلاد', I.birth) + row('الدراسة', I.study) + row('الصف الدراسي', I.grade)
+      : row('المؤهل الدراسي', [I.qual, I.qualStatus].filter(Boolean).join(' — ')) + row('الحالة الاجتماعية', I.marital) + row('الوظيفة الحالية', I.job) + row('الوقت المتاح للحضور', I.avail))}
+    ${sec('العنوان والتواصل', row('العنوان', I.address) + telRow('رقم الهاتف', I.phone, I.whatsapp))}
+    ${child ? sec('خاص بولي الأمر', row('اسم ولي الأمر', I.gName) + telRow('رقم الهاتف', I.gPhone, I.gWhatsapp) + row('الوظيفة', I.gJob) + row('صلة القرابة', I.gRel === 'شخص آخر' ? (I.gRelOther || 'شخص آخر') : I.gRel)) : ''}
+    ${sec('اختبار تحديد مستوى', row('قراءة', T.read) + row('تجويد', T.tajweed) + row('حفظ', T.hifz))}
+    ${sec('قرار الإدارة', row(child ? 'يلتحق الطالب بحلقة' : 'يلتحق الأخ بحلقة', h ? halaqaLabel(h) : '') + row('بدار', placeName(h)) + row('وقت الحلقة', timeText(h)) + row('تحرر يوم', I.joinDate) + row('الاشتراك الشهري', I.fee === '' || I.fee == null ? '' : I.fee + ' جنيه') + row('التوقيع على التنبيهات', I.pledge ? (child ? 'وقّع ولي الأمر' : 'وقّع المتقدم') : 'لم يوقّع بعد'))}
+    <div class="row noprint">${session?.role === 'admin' ? `<button class="btn primary" data-act="editStudent" data-id="${st.id}">تعديل</button>` : ''}<button class="btn" data-act="printCard">طباعة</button></div>
+  </div>`;
+  openInfo('ملف الطالب', html);
+}
+
+/* نموذج الحلقة: المكان والمعلم والمشرف، والوقت بالساعة أو بالصلوات */
+function halaqaForm(h, presetPlace) {
+  const isNew = !h, w = h?.time || { mode: 'prayer', fromPrayer: 'العصر', toKind: 'prayer', toPrayer: 'المغرب' };
+  const sel = (name, list, val) => `<select name="${name}">${list.map(o => `<option value="${esc(o.v)}" ${String(o.v) === String(val ?? '') ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`;
+  const P = PRAYERS.map(x => ({ v: x, l: x }));
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal"><h2>${isNew ? 'حلقة جديدة' : 'تعديل الحلقة'}</h2>
+    <label>المكان${sel('placeId', [{ v: '', l: '— اختر المكان —' }, ...db.places.map(p => ({ v: p.id, l: p.name + ' (' + p.type + ')' }))], h?.placeId ?? presetPlace)}</label>
+    <label>المعلم — الحلقة تُسمّى باسمه${sel('teacherId', [{ v: '', l: '— بدون —' }, ...opts(db.teachers)], h?.teacherId)}</label>
+    <label>المشرف${sel('supervisorId', [{ v: '', l: '— بدون —' }, ...opts(db.supervisors)], h?.supervisorId)}</label>
+    <fieldset class="tfs"><legend>وقت الحلقة</legend>
+      <div class="seg"><label><input type="radio" name="mode" value="prayer" ${w.mode !== 'clock' ? 'checked' : ''}><span>بالصلوات</span></label><label><input type="radio" name="mode" value="clock" ${w.mode === 'clock' ? 'checked' : ''}><span>بالساعة</span></label></div>
+      <div data-m="prayer"><div class="two"><label>من بعد صلاة${sel('fromPrayer', P, w.fromPrayer || 'العصر')}</label><label>إلى${sel('toKind', [{ v: 'prayer', l: 'صلاة' }, { v: 'clock', l: 'الساعة' }], w.toKind || 'prayer')}</label></div>
+        <div class="two"><label data-k="prayer">صلاة${sel('toPrayer', [{ v: '', l: '—' }, ...P], w.toPrayer)}</label><label data-k="clock">الساعة<input type="time" name="toTime" value="${esc(w.toTime || '')}"></label></div></div>
+      <div data-m="clock" class="two"><label>من الساعة<input type="time" name="from" value="${esc(w.from || '')}"></label><label>إلى الساعة<input type="time" name="to" value="${esc(w.to || '')}"></label></div>
+      <p class="tprev"></p>
+    </fieldset>
+    ${h && !h.teacherId && h.name ? `<label>اسم مؤقت (يُستبدل باسم المعلم عند اختياره)<input name="name" value="${esc(h.name)}"></label>` : ''}
+    <div class="row"><button type="button" class="btn primary" data-save>حفظ</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
+  document.body.appendChild(ov);
+  const $ = q => ov.querySelector(q), val = n => ov.querySelector(`[name=${n}]`)?.value;
+  const mode = () => ov.querySelector('[name=mode]:checked').value;
+  const read = () => mode() === 'clock' ? { mode: 'clock', from: val('from'), to: val('to') } : { mode: 'prayer', fromPrayer: val('fromPrayer'), toKind: val('toKind'), toPrayer: val('toPrayer'), toTime: val('toTime') };
+  const sync = () => {
+    ov.querySelectorAll('[data-m]').forEach(x => { x.hidden = x.dataset.m !== mode(); });
+    ov.querySelectorAll('[data-k]').forEach(x => { x.hidden = x.dataset.k !== val('toKind'); });
+    const t = byId(db.teachers, val('teacherId'));
+    $('.tprev').innerHTML = `<b>${esc(t ? 'حلقة ' + t.name : 'حلقة بلا معلم')}</b> — ${esc(timeText({ time: read() }) || 'حدّد الوقت')}`;
+  };
+  ov.addEventListener('change', sync); ov.addEventListener('input', sync); sync();
+  $('[data-close]').onclick = () => ov.remove();
+  $('[data-save]').onclick = () => {
+    const t = read();
+    if (!val('placeId')) { toast('اختر المكان'); return; }
+    if (t.mode === 'clock') {
+      if (!t.from || !t.to) { toast('حدّد ساعة البداية والنهاية'); return; }
+      if (t.from >= t.to) { toast('ساعة النهاية يجب أن تكون بعد البداية'); return; }
+    } else if (t.toKind === 'prayer') {
+      if (!t.toPrayer) { toast('حدّد الصلاة التي تنتهي عندها الحلقة'); return; }
+      if (PRAYERS.indexOf(t.toPrayer) <= PRAYERS.indexOf(t.fromPrayer)) { toast('صلاة النهاية يجب أن تكون بعد صلاة البداية'); return; }
+    } else if (!t.toTime) { toast('حدّد ساعة انتهاء الحلقة'); return; }
+    const o = { placeId: val('placeId'), teacherId: val('teacherId'), supervisorId: val('supervisorId'), time: t };
+    if (val('name') !== undefined) o.name = val('name').trim();
+    if (isNew) db.halaqat.push({ id: uid(), ...o }); else Object.assign(h, o);
+    ov.remove(); save(); render(); toast('تم حفظ الحلقة');
   };
 }
 
@@ -764,7 +1052,16 @@ const A = {
     openForm('كلمة مرور حساب ' + ROLE_L[d.r], [{ name: 'pin', label: 'كلمة المرور', type: 'password', required: true }], v => { if (v.pin !== acc.pin) return 'كلمة المرور غير صحيحة'; go(); });
   },
   logout: () => { ui.shown = {}; ui.pick = null; session = null; ss.del(SKEY); ui.tab = null; render(); },
-  tab: d => { ui.tab = d.v; render(); },
+  tab: d => { ui.tab = d.v; ui.nav = false; render(); window.scrollTo(0, 0); },
+  navToggle: () => { ui.nav = !ui.nav; document.querySelector('.shell')?.classList.toggle('open', ui.nav); },
+  sideToggle: () => {
+    /* تبديل الصنف فقط دون إعادة الرسم، حتى تعمل الحركة الانسيابية */
+    ui.collapsed = !ui.collapsed; saveUI();
+    document.querySelector('.shell')?.classList.toggle('collapsed', ui.collapsed);
+    const t = document.querySelector('.side-toggle'), l = ui.collapsed ? 'فرد القائمة' : 'طي القائمة';
+    if (t) { t.title = l; t.setAttribute('aria-label', l); t.setAttribute('aria-expanded', String(!ui.collapsed)); }
+  },
+  navClose: () => { ui.nav = false; document.querySelector('.shell')?.classList.remove('open'); },
   panel: () => { if (session?.role !== 'admin') return; ui.tab = 'settings'; render(); window.scrollTo(0, 0); },
   hist: d => openInfo('سجل: ' + sName(d.id), historyTable(d.id)),
 
@@ -813,16 +1110,19 @@ const A = {
     v => { Object.assign(t, { name: v.name.trim(), phone: v.phone, pin: v.pin }); }); },
   delTeacher: d => ask('حذف المعلم؟ ستبقى حلقاته بدون معلم.', () => { db.teachers = db.teachers.filter(t => t.id !== d.id); db.halaqat.forEach(h => { if (h.teacherId === d.id) h.teacherId = ''; }); save(); render(); }),
 
-  addHalaqa: () => openForm('حلقة جديدة', [{ name: 'name', label: 'اسم الحلقة', required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'supervisorId', label: 'المشرف', type: 'select', options: [{ v: '', l: '— بدون —' }, ...opts(db.supervisors)] }, { name: 'schedule', label: 'الموعد' }, { name: 'place', label: 'المكان' }],
-    v => { db.halaqat.push({ id: uid(), name: v.name.trim(), teacherId: v.teacherId, supervisorId: v.supervisorId, schedule: v.schedule, place: v.place.trim() }); }),
-  editHalaqa: d => { const h = byId(db.halaqat, d.id); openForm('تعديل حلقة', [{ name: 'name', label: 'اسم الحلقة', value: h.name, required: true }, { name: 'teacherId', label: 'المعلم', type: 'select', value: h.teacherId, options: [{ v: '', l: '— بدون —' }, ...opts(db.teachers)] }, { name: 'supervisorId', label: 'المشرف', type: 'select', value: h.supervisorId || '', options: [{ v: '', l: '— بدون —' }, ...opts(db.supervisors)] }, { name: 'schedule', label: 'الموعد', value: h.schedule }, { name: 'place', label: 'المكان', value: h.place || '' }],
-    v => { Object.assign(h, { name: v.name.trim(), teacherId: v.teacherId, supervisorId: v.supervisorId, schedule: v.schedule, place: v.place.trim() }); }); },
+  addHalaqa: d => { if (!db.places.length) { toast('أضف مكانًا أولًا'); A.addPlace(); return; } halaqaForm(null, d.p); },
+  editHalaqa: d => halaqaForm(byId(db.halaqat, d.id)),
+  addPlace: () => openForm('مكان جديد', [{ name: 'name', label: 'اسم المكان', required: true }, { name: 'type', label: 'النوع', type: 'select', options: PLACE_TYPES.map(x => ({ v: x, l: x })) }, { name: 'address', label: 'العنوان (اختياري)' }],
+    v => { const n = v.name.trim(); if (db.places.some(x => norm(x.name) === norm(n))) return 'يوجد مكان بالاسم نفسه'; db.places.push({ id: uid(), name: n, type: v.type, address: v.address.trim() }); }),
+  editPlace: d => { const pl = byId(db.places, d.id); if (!pl) return; openForm('تعديل المكان', [{ name: 'name', label: 'اسم المكان', value: pl.name, required: true }, { name: 'type', label: 'النوع', type: 'select', value: pl.type, options: PLACE_TYPES.map(x => ({ v: x, l: x })) }, { name: 'address', label: 'العنوان (اختياري)', value: pl.address || '' }],
+    v => { Object.assign(pl, { name: v.name.trim(), type: v.type, address: v.address.trim() }); }); },
+  delPlace: d => ask('حذف المكان؟ ستبقى حلقاته بلا مكان حتى تنقلها.', () => { db.places = db.places.filter(x => x.id !== d.id); db.halaqat.forEach(h => { if (h.placeId === d.id) h.placeId = ''; }); save(); render(); }),
   delHalaqa: d => ask('حذف الحلقة؟ سيبقى طلابها بدون حلقة.', () => { db.halaqat = db.halaqat.filter(h => h.id !== d.id); db.students.forEach(s => { if (s.halaqaId === d.id) s.halaqaId = ''; }); save(); render(); }),
 
-  addStudent: () => openForm('طالب جديد', [{ name: 'name', label: 'الاسم', required: true }, { name: 'halaqaId', label: 'الحلقة', type: 'select', value: ui.fh, options: [{ v: '', l: '— بدون —' }, ...opts(db.halaqat)] }, { name: 'phone', label: 'جوال ولي الأمر', type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: genPass(), required: true }],
-    v => { db.students.push({ id: uid(), name: v.name.trim(), halaqaId: v.halaqaId, phone: v.phone, pin: v.pin }); }),
-  editStudent: d => { const s = byId(db.students, d.id); openForm('تعديل طالب', [{ name: 'name', label: 'الاسم', value: s.name, required: true }, { name: 'halaqaId', label: 'الحلقة', type: 'select', value: s.halaqaId, options: [{ v: '', l: '— بدون —' }, ...opts(db.halaqat)] }, { name: 'phone', label: 'جوال ولي الأمر', value: s.phone, type: 'tel' }, { name: 'pin', label: 'كلمة المرور', value: s.pin, required: true }],
-    v => { Object.assign(s, { name: v.name.trim(), halaqaId: v.halaqaId, phone: v.phone, pin: v.pin }); }); },
+  addStudent: () => studentForm(null),
+  editStudent: d => { document.querySelectorAll('.overlay').forEach(o => o.remove()); studentForm(byId(db.students, d.id)); },
+  studentCard: d => studentCard(byId(db.students, d.id)),
+  printCard: () => { document.body.classList.add('print-modal'); window.print(); setTimeout(() => document.body.classList.remove('print-modal'), 500); },
   delMember: d => {
     if (d.k === 'teachers') return A.delTeacher(d);
     if (d.k === 'students') return A.delStudent(d);
@@ -969,6 +1269,7 @@ document.addEventListener('change', e => {
   }
   if (c === 'hid') { ui.hid = el.value; render(); }
   else if (c === 'fh') { ui.fh = el.value; render(); }
+  else if (c === 'fcat') { ui.fcat = el.value; render(); }
   else if (c === 'date') { ui.date = el.value || today(); render(); }
   else if (c === 'import') {
     const f = el.files[0]; if (!f) return;
@@ -1007,8 +1308,36 @@ document.addEventListener('input', e => {
   renderPick();
   showResults();
 });
+/* سحب حافة الشريط الجانبي لتغيير اتساعه، والإفلات تحت الحد الأدنى يطويه */
+let sideDrag = null;
+const setSideW = w => { ui.sideW = clampW(w); const sh = document.querySelector('.shell'); sh?.style.setProperty('--side-w', ui.sideW + 'px'); document.querySelector('.side-resize')?.setAttribute('aria-valuenow', ui.sideW); };
+document.addEventListener('pointerdown', e => {
+  const h = e.target.closest?.('.side-resize'); if (!h) return;
+  e.preventDefault();
+  sideDrag = { right: document.querySelector('.side').getBoundingClientRect().right, raw: ui.sideW };
+  try { h.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  document.body.classList.add('resizing'); document.querySelector('.shell')?.classList.add('resizing');
+});
+document.addEventListener('pointermove', e => {
+  if (!sideDrag) return;
+  sideDrag.raw = sideDrag.right - e.clientX;
+  setSideW(sideDrag.raw);
+});
+const endDrag = () => {
+  if (!sideDrag) return;
+  const raw = sideDrag.raw; sideDrag = null;
+  document.body.classList.remove('resizing'); document.querySelector('.shell')?.classList.remove('resizing');
+  if (raw < SIDE_MIN - 40) { ui.collapsed = true; ui.sideW = SIDE_W; saveUI(); render(); return; }
+  saveUI();
+};
+document.addEventListener('pointerup', endDrag);
+document.addEventListener('pointercancel', endDrag);
+document.addEventListener('dblclick', e => { if (e.target.closest?.('.side-resize')) { setSideW(SIDE_W); saveUI(); } });
 document.addEventListener('focusin', e => { if (e.target.id === 'ufilter') showResults(); });
 document.addEventListener('keydown', e => {
+  if (e.target.classList?.contains('side-resize') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault(); setSideW(ui.sideW + (e.key === 'ArrowLeft' ? 10 : -10)); saveUI(); return;
+  }
   if (e.key === 'Escape') { showResults(false); return; }
   if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
   if (e.target.id === 'ufilter') {
@@ -1021,7 +1350,23 @@ document.addEventListener('keydown', e => {
 });
 
 /* واجهة للوحدات الإضافية (مثل المرتبات) */
-window.QL = { get db() { return db; }, save, render, openForm, openInfo, ask, toast, esc, uid, today, byId, norm, empty };
+window.QL = { get db() { return db; }, get session() { return session; }, me, ICONS: TAB_ICONS, placeNames: () => (db.places || []).map(x => x.name), save, render, openForm, openInfo, ask, toast, esc, uid, today, byId, norm, empty };
+
+/* العمل بدون إنترنت: تسجيل عامل الخدمة، وشارة تظهر عند انقطاع الاتصال */
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => { /* بيئة لا تدعمه */ }); });
+}
+const netPill = () => {
+  let el = document.getElementById('netpill');
+  if (!el) { el = document.createElement('div'); el.id = 'netpill'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
+  const off = navigator.onLine === false;
+  el.hidden = !off;
+  el.textContent = 'بدون إنترنت — التطبيق يعمل وبياناتك محفوظة على هذا الجهاز';
+  document.body.classList.toggle('offline', off);
+};
+window.addEventListener('online', () => { netPill(); toast('عاد الاتصال بالإنترنت'); });
+window.addEventListener('offline', netPill);
+netPill();
 
 applyTheme();
 render();
