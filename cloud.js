@@ -65,10 +65,10 @@ async function req(path, { method = 'GET', body, headers = {}, anon = false, ret
   return j;
 }
 const rpc = (fn, args = {}, anon = false) => req(`/rest/v1/rpc/${fn}`, { method: 'POST', body: args, anon });
-async function selectAll(table, order = 'id', extra = '') {
+async function selectAll(table, order = 'id', extra = '', cols = '*') {
   const out = [];
   for (let off = 0; ; off += 1000) {
-    const page = await req(`/rest/v1/${table}?select=*&order=${order}&limit=1000&offset=${off}${extra}`);
+    const page = await req(`/rest/v1/${table}?select=${cols}&order=${order}&limit=1000&offset=${off}${extra}`);
     out.push(...(page || []));
     if (!page || page.length < 1000) break;
   }
@@ -82,17 +82,19 @@ async function signIn(email, password) {
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new HttpError(r.status, /invalid/i.test(j.error_description || j.msg || '') ? 'كلمة المرور غير صحيحة' : (j.error_description || j.msg || 'تعذّر الدخول'));
-  auth = null; storeAuth(j);
+  auth = null; storeAuth(j); resetSync();
   snap = LS.get(snapKey());
   emit();
   return auth;
 }
 async function signOut() {
   try { if (auth) await req('/auth/v1/logout', { method: 'POST', retry: false }); } catch (e) { /* ignore */ }
-  auth = null; snap = null; LS.del(AKEY); emit();
+  auth = null; snap = null; LS.del(AKEY); resetSync(); emit();
 }
 const lookup = q => rpc('login_lookup', { q }, true);
-const setMember = m => { if (auth) { auth.member = m; LS.set(AKEY, auth); } };
+const setMember = m => { if (auth) { if (auth.member?.id !== m?.id) raw = null; auth.member = m; LS.set(AKEY, auth); } };
+/* بدء مزامنة جديدة من الصفر (حساب آخر أو خروج): لا تُخلط بيانات جلستين */
+function resetSync() { raw = null; since = null; lastFull = 0; photoCache.clear(); photoSent.clear(); }
 
 /* ---------------- الوظيفة السحابية لإدارة الحسابات ---------------- */
 async function fn(body) {
@@ -125,7 +127,7 @@ function memberRow(m, role) {
     halaqa_id: role === 'student' ? nz(m.halaqaId) : null,
     cat: role === 'student' ? (m.cat === 'adult' ? 'adult' : 'child') : null,
     info: role === 'teacher' ? { personal: m.personal || {}, tech: m.tech || {} } : (m.info || {}),
-    extra: m.extra || {}, photo: m.photo || null
+    extra: m.extra || {}
   };
 }
 /* كل مجموعة: [اسم المجموعة، الجدول، المفتاح، الصفوف] بترتيب يحترم العلاقات بين الجداول */
@@ -199,12 +201,57 @@ function ensureUuids(db) {
 function emptyDb() {
   return { settings: { org: 'إدارة الحلقات القرآنية' }, admins: [], supervisors: [], teachers: [], students: [], places: [], halaqat: [], attendance: [], records: [], news: [], fields: { students: [], teachers: [] }, pending: [] };
 }
+/* ---------------- المزامنة بالتغييرات فقط ----------------
+   أول جلب في الجلسة (وكل 30 دقيقة) كامل، وما بينهما يُجلب فقط ما تغيّر منذ آخر مرة (عمود sync_ts)
+   مع سجل المحذوفات (sync_deleted). الصور لا تُنزَّل مع المزامنة، بل عند الحاجة فقط.
+   إن لم يُنفَّذ ملف sync_incremental.sql على الخادم بعد، يعمل التطبيق بالجلب الكامل كما كان. */
+const SYNC_TABLES = {
+  settings: ['key'], places: ['id'], members: ['id'], member_admin: ['member_id'], halaqat: ['id'], attendance: ['id'],
+  records: ['id'], news: ['id'], custom_fields: ['kind', 'key'], pay_settings: ['id'], pay_employees: ['id'],
+  pay_rows: ['id'], pay_closed: ['y', 'm'], absences: ['id'], pending_columns: ['id']
+};
+const MEMBER_COLS = 'id,user_id,login_email,role,name,phone,halaqa_id,cat,info,extra,has_photo';
+const FULL_EVERY = 30 * 60000;
+let raw = null, since = null, lastFull = 0, inc = null, lastChanged = true;
+const photoCache = new Map();   // معرّف العضو ← الصورة ('' = بلا صورة)
+const photoSent = new Map();    // معرّف العضو ← بصمة الصورة كما هي على الخادم (للصور المعروفة فقط)
+const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return s.length + ':' + h; };
+const pkOf = (t, r) => SYNC_TABLES[t].map(k => r[k]).join('|');
+function tablesFor(role) {
+  const t = ['settings', 'places', 'members', 'member_admin', 'halaqat', 'attendance', 'records', 'news', 'custom_fields'];
+  if (role === 'admin') t.push('pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns');
+  else if (role === 'supervisor') t.push('absences');
+  return t;
+}
+function notePhoto(r, incremental) {
+  if (!inc) { photoCache.set(r.id, r.photo || ''); photoSent.set(r.id, hashStr(r.photo || '')); return; }
+  if (!r.has_photo) { photoCache.set(r.id, ''); photoSent.set(r.id, hashStr('')); }
+  else if (incremental || photoCache.get(r.id) === '') { photoCache.delete(r.id); photoSent.delete(r.id); }
+}
+async function fetchTables(tables, filter = '') {
+  const got = await Promise.all(tables.map(t => selectAll(t, SYNC_TABLES[t].join(','), filter, t === 'members' && inc ? MEMBER_COLS : '*')));
+  return Object.fromEntries(tables.map((t, i) => [t, got[i]]));
+}
 async function pull() {
-  const role = auth?.member?.role;
-  const [settings, places, members, madm, halaqat, attendance, records, news, fields] = await Promise.all([
-    selectAll('settings', 'key'), selectAll('places'), selectAll('members'), selectAll('member_admin', 'member_id'), selectAll('halaqat'),
-    selectAll('attendance'), selectAll('records'), selectAll('news'), selectAll('custom_fields', 'kind,key')
-  ]);
+  const role = auth?.member?.role, tables = tablesFor(role);
+  if (inc === null) { try { await rpc('sync_now'); inc = true; } catch (e) { inc = false; } }
+  if (inc && raw && raw.role === role && since && Date.now() - lastFull < FULL_EVERY) {
+    const now = await rpc('sync_now'), f = '&sync_ts=gt.' + encodeURIComponent(since);
+    const [got, tomb] = await Promise.all([fetchTables(tables, f), selectAll('sync_deleted', 'rev', '&at=gt.' + encodeURIComponent(since))]);
+    lastChanged = false;
+    for (const t of tables) for (const r of got[t]) { raw[t].set(pkOf(t, r), r); lastChanged = true; if (t === 'members') notePhoto(r, true); }
+    for (const d of tomb) { const m = raw[d.tbl]; if (m && m.delete(SYNC_TABLES[d.tbl].map(c => d.pk[c]).join('|'))) lastChanged = true; }
+    since = new Date(new Date(now).getTime() - 60000).toISOString();
+  } else {
+    const now = inc ? await rpc('sync_now') : null;
+    const got = await fetchTables(tables);
+    raw = { role };
+    for (const t of tables) { raw[t] = new Map(got[t].map(r => [pkOf(t, r), r])); if (t === 'members') got[t].forEach(r => notePhoto(r, false)); }
+    since = now ? new Date(new Date(now).getTime() - 60000).toISOString() : null;
+    lastFull = Date.now(); lastChanged = true;
+  }
+  const rows = t => (raw[t] ? [...raw[t].values()] : []);
+  const [settings, places, members, madm, halaqat, attendance, records, news, fields] = ['settings', 'places', 'members', 'member_admin', 'halaqat', 'attendance', 'records', 'news', 'custom_fields'].map(rows);
   const db = emptyDb();
   settings.forEach(s => { db.settings[s.key] = s.value; });
   db.places = places.map(p => ({ id: p.id, name: p.name, type: p.type, address: p.address || '' }));
@@ -212,7 +259,7 @@ async function pull() {
   members.forEach(m => {
     const base = { id: m.id, name: m.name, phone: m.phone || '', userId: m.user_id || null, hasLogin: !!m.login_email, extra: m.extra || {} };
     if (m.role === 'teacher') db.teachers.push({ ...base, personal: m.info?.personal || {}, tech: m.info?.tech || {}, admin: adm.get(m.id) || {} });
-    else if (m.role === 'student') db.students.push({ ...base, halaqaId: m.halaqa_id || '', cat: m.cat || 'child', info: m.info || {}, photo: m.photo || undefined });
+    else if (m.role === 'student') db.students.push({ ...base, halaqaId: m.halaqa_id || '', cat: m.cat || 'child', info: m.info || {}, hasPhoto: inc ? !!m.has_photo : !!m.photo, photo: photoCache.get(m.id) });
     else db[ROLE_COLL[m.role]].push(base);
   });
   db.halaqat = halaqat.map(h => ({ id: h.id, name: h.name || '', teacherId: h.teacher_id || '', supervisorId: h.supervisor_id || '', placeId: h.place_id || '', time: h.time || undefined }));
@@ -221,19 +268,17 @@ async function pull() {
   db.news = news.map(n => ({ id: n.id, text: n.text, audience: n.audience, date: n.date }));
   fields.forEach(f => { (db.fields[f.kind] = db.fields[f.kind] || []).push({ key: f.key, label: f.label, type: f.type }); });
   if (role === 'admin') {
-    const [ps, emps, rows, closed, abs, pend] = await Promise.all([
-      selectAll('pay_settings'), selectAll('pay_employees'), selectAll('pay_rows'), selectAll('pay_closed', 'y,m'), selectAll('absences'), selectAll('pending_columns')
-    ]);
+    const [ps, emps, prow, closed, abs, pend] = ['pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns'].map(rows);
     db.pending = pend.map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date }));
     db.payroll = {
       settings: ps[0]?.data || {},
       employees: emps.map(e => ({ id: e.id, code: e.code || '', name: e.name, role: e.role || '', sys: e.sys || '', status: e.status, basic: e.basic, rate: e.rate, incentive: e.incentive, transport: e.transport, hours: e.hours, place: e.place || '', note: e.note || '' })),
-      rows: rows.map(r => ({ id: r.id, y: r.y, m: r.m, eid: r.emp_id, name: r.name || '', role: r.role || '', base: r.base, extra: r.extra, exc: r.exc, absP: r.abs_p, absN: r.abs_n, mtgP: r.mtg_p, mtgN: r.mtg_n, dTest: r.d_test, dRec: r.d_rec, dBooks: r.d_books, basic: r.basic, rate: r.rate, incentive: r.incentive, transport: r.transport, note: r.note || '' })),
+      rows: prow.map(r => ({ id: r.id, y: r.y, m: r.m, eid: r.emp_id, name: r.name || '', role: r.role || '', base: r.base, extra: r.extra, exc: r.exc, absP: r.abs_p, absN: r.abs_n, mtgP: r.mtg_p, mtgN: r.mtg_n, dTest: r.d_test, dRec: r.d_rec, dBooks: r.d_books, basic: r.basic, rate: r.rate, incentive: r.incentive, transport: r.transport, note: r.note || '' })),
       closed: closed.map(c => c.y + '-' + c.m),
       absences: abs.map(absFromRow)
     };
   } else if (role === 'supervisor') {
-    const [abs, staff, cur] = await Promise.all([selectAll('absences'), rpc('staff_list'), rpc('current_pay_month').catch(() => null)]);
+    const abs = rows('absences'), [staff, cur] = await Promise.all([rpc('staff_list'), rpc('current_pay_month').catch(() => null)]);
     const c = Array.isArray(cur) ? cur[0] : cur;
     db.payroll = { settings: {}, employees: (staff || []).map(e => ({ id: e.id, code: e.code || '', name: e.name, place: e.place || '', status: e.status })), rows: [], closed: [], absences: abs.map(absFromRow), curMonth: c && c.y ? { y: c.y, m: c.m } : null, readOnly: true };
   }
@@ -292,6 +337,14 @@ async function push(db) {
       }
       gr.up.forEach(r => { snap[gr.name] = snap[gr.name] || {}; snap[gr.name][rowKey(gr.pk, r)] = JSON.stringify(r); });
     }
+    /* الصور تُرسل وحدها وفقط إن تغيّرت فعلًا؛ وصورة لم تُحمَّل بعد لا تُمسح أبدًا */
+    if (role === 'admin') for (const m of db.students || []) {
+      if (m.photo === undefined) continue;
+      const cur = m.photo || '', hv = hashStr(cur), known = photoSent.get(m.id);
+      if (known === hv || (!cur && known === undefined)) continue;
+      await req(`/rest/v1/members?id=eq.${m.id}`, { method: 'PATCH', body: { photo: cur || null }, headers: { Prefer: 'return=minimal' } });
+      photoSent.set(m.id, hv); photoCache.set(m.id, cur);
+    }
     for (const gr of ds.slice().reverse()) {
       if (gr.del.length) await doDelete(gr, gr.del);
       gr.del.forEach(k => { delete snap[gr.name][k]; });
@@ -343,6 +396,19 @@ window.Cloud = {
   cfg: CFG, uuid, isUuid, ensureUuids, emptyDb, snapshotOf,
   signIn, signOut, lookup, setMember, pull, push, schedule, pendingCount, cached, saveLocal, publicSettings,
   provision, fn, rpc, req, selectAll,
+  get lastChanged() { return lastChanged; },
+  get incremental() { return inc; },
+  photoOf: id => photoCache.get(id),
+  /* تنزيل صور أعضاء محددين عند الحاجة (40 صورة في الطلب) */
+  async loadPhotos(ids) {
+    const need = [...new Set(ids)].filter(id => isUuid(id) && !photoCache.has(id));
+    for (let i = 0; i < need.length; i += 40) {
+      const part = need.slice(i, i + 40);
+      const got = await req(`/rest/v1/members?select=id,photo&id=in.(${part.join(',')})`);
+      (got || []).forEach(r => { photoCache.set(r.id, r.photo || ''); photoSent.set(r.id, hashStr(r.photo || '')); });
+      part.forEach(id => { if (!photoCache.has(id)) { photoCache.set(id, ''); photoSent.set(id, hashStr('')); } });
+    }
+  },
   set onReject(f) { onReject = f; },
   on: f => { listeners.add(f); return () => listeners.delete(f); },
   /* لاختبار ربط حساب جديد بالدخول دون المساس بجلسة الإداري */
