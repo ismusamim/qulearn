@@ -136,7 +136,7 @@ function groups(db) {
   const g = [];
   const add = (name, table, pk, rows, conflict) => g.push({ name, table, pk, rows, conflict });
   /* priv_*: إعدادات خاصة بالمدير (مثل فئات الاشتراكات وخصوماتها) لا يقرؤها غيره على الخادم */
-  add('settings', 'settings', ['key'], ['org', 'theme', 'logo', 'priv_fees'].filter(k => db.settings?.[k] !== undefined).map(k => ({ key: k, value: db.settings[k] ?? null })));
+  add('settings', 'settings', ['key'], ['org', 'theme', 'logo', 'priv_fees', 'priv_perms'].filter(k => db.settings?.[k] !== undefined).map(k => ({ key: k, value: db.settings[k] ?? null })));
   add('places', 'places', ['id'], (db.places || []).map(p => ({ id: p.id, name: p.name, type: p.type || 'مسجد', address: p.address || '' })));
   add('staff', 'members', ['id'], ['admin', 'supervisor', 'teacher'].flatMap(r => (db[ROLE_COLL[r]] || []).map(m => memberRow(m, r))));
   add('halaqat', 'halaqat', ['id'], (db.halaqat || []).map(h => ({ id: h.id, name: h.name || '', teacher_id: nz(h.teacherId), supervisor_id: nz(h.supervisorId), place_id: nz(h.placeId), time: h.time || null })));
@@ -320,6 +320,16 @@ async function pull() {
     const abs = rows('absences'), [staff, cur] = raw.extras;
     const c = Array.isArray(cur) ? cur[0] : cur;
     db.payroll = { settings: {}, employees: (staff || []).map(e => ({ id: e.id, code: e.code || '', name: e.name, place: e.place || '', status: e.status })), rows: [], closed: [], absences: abs.map(absFromRow), curMonth: c && c.y ? { y: c.y, m: c.m } : null, readOnly: true };
+  }
+  /* صلاحيات المستخدم (غير المدير) كما يحسبها الخادم: تُجلب عند الجلب الكامل أو تغيّر الإعدادات فقط */
+  if (role !== 'admin') {
+    if (mode === 'full' || !raw.perms || !scoped || chk.tables.includes('settings')) {
+      let p = raw.perms || [];
+      try { p = (await rpc('my_perms')) || []; } catch (e) { /* قبل تنفيذ perms.sql: بلا صلاحيات إضافية */ }
+      if (JSON.stringify(p) !== JSON.stringify(raw.perms)) lastChanged = true;
+      raw.perms = p;
+    }
+    db.myPerms = raw.perms;
   }
   if (mode !== 'none' || !snap) { snap = snapshotOf(db); saveLocal(db); }
   lastSync = new Date(); lastError = ''; emit();
