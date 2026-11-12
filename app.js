@@ -107,6 +107,83 @@ function load() {
 let db = load();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('تعذّر حفظ البيانات في المتصفح'); } };
 
+/* ============ المظهر: الألوان والشعار ============ */
+const THEME0 = { navy: '#13294b', gold: '#b8904f', leaf: '#4e7d45', bg: '#f8f5ee', text: '#1a2333', red: '#b3372f', amber: '#b7791f' };
+const THEME_KEYS = [
+  ['navy', 'اللون الأساسي', 'الشريط العلوي والأزرار والعناوين'],
+  ['gold', 'لون التمييز', 'الإطارات والتبويب النشط والتنبيهات'],
+  ['bg', 'لون الخلفية', 'خلفية الصفحات'],
+  ['text', 'لون النص', 'الكتابة في كل الصفحات'],
+  ['leaf', 'لون «حاضر»', 'زر الحضور عند اختياره'],
+  ['amber', 'لون «متأخر / معتذر»', 'أزرار التأخر والاعتذار'],
+  ['red', 'لون «غائب» والحذف', 'زر الغياب وأزرار الحذف']
+];
+const PRESETS = [
+  ['ألوان الشعار', THEME0],
+  ['أخضر كلاسيكي', { navy: '#0f6b4f', gold: '#b8892b', leaf: '#2f8a4f', bg: '#f6f7f5', text: '#1d2b25' }],
+  ['عنابي', { navy: '#6b1d2f', gold: '#c09a5b', bg: '#faf6f2', text: '#2a1a1d' }],
+  ['أزرق وفيروزي', { navy: '#1f4e79', gold: '#2a9d8f', leaf: '#3a8d4f', bg: '#f4f8fb', text: '#16263a' }],
+  ['رمادي هادئ', { navy: '#2f3a45', gold: '#8a7a5c', bg: '#f5f5f3', text: '#1f2328' }]
+];
+const hex2rgb = h => { h = String(h).replace('#', ''); if (h.length === 3) h = [...h].map(c => c + c).join(''); const n = parseInt(h, 16) || 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const rgb2hex = a => '#' + a.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+const mix = (a, b, t) => { const x = hex2rgb(a), y = hex2rgb(b); return rgb2hex(x.map((v, i) => v + (y[i] - v) * t)); };
+const lum = h => { const [r, g, b] = hex2rgb(h).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }); return .2126 * r + .7152 * g + .0722 * b; };
+const logoSrc = () => db.settings.logo || LOGO;
+const theme = () => ({ ...THEME0, ...(db.settings.theme || {}) });
+function applyTheme() {
+  const T = theme(), st = document.documentElement.style, set = (k, v) => st.setProperty('--' + k, v);
+  const on = lum(T.navy) > .45 ? '#14181f' : '#ffffff';
+  set('navy', T.navy); set('navy-d', mix(T.navy, '#000000', .35)); set('navy-l', mix(T.navy, '#ffffff', .9));
+  set('gold', T.gold); set('gold-d', mix(T.gold, '#000000', .3)); set('gold-l', mix(T.gold, '#ffffff', .82));
+  set('leaf', T.leaf); set('bg', T.bg); set('text', T.text); set('red', T.red); set('amber', T.amber);
+  set('line', mix(T.gold, '#ffffff', .72)); set('muted', mix(T.text, '#ffffff', .4));
+  set('on-navy', on); set('tab-text', mix(on, mix(T.navy, '#000000', .35), .25));
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', T.navy);
+  document.querySelectorAll('link[rel=icon]').forEach(l => l.setAttribute('href', logoSrc()));
+  if (db.settings.logo) document.querySelector('#splash img')?.setAttribute('src', db.settings.logo);
+}
+/* استخراج لوحة ألوان من صورة الشعار: الأغمق للأساسي، والأبرز المتوسط للتمييز، والأخضر للحضور */
+function hsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return { h: 0, s: 0, l };
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+  return { h: (h + 360) % 360, s, l };
+}
+function paletteFrom(img) {
+  const n = 128, c = document.createElement('canvas'); c.width = c.height = n;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0, n, n);
+  const px = g.getImageData(0, 0, n, n).data, buckets = new Map();
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] < 200) continue;
+    const k = (px[i] >> 4) << 8 | (px[i + 1] >> 4) << 4 | (px[i + 2] >> 4), b = buckets.get(k) || [0, 0, 0, 0];
+    b[0] += px[i]; b[1] += px[i + 1]; b[2] += px[i + 2]; b[3]++; buckets.set(k, b);
+  }
+  const cols = [...buckets.values()].map(([r, g2, b, cnt]) => { r /= cnt; g2 /= cnt; b /= cnt; return { hex: rgb2hex([r, g2, b]), n: cnt, ...hsl(r, g2, b) }; }).sort((a, b) => b.n - a.n);
+  const hd = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+  /* الأكثر انتشارًا مع تفضيل الألوان المشبعة على الرمادية */
+  const best = (f, w = x => x.n * (.25 + x.s)) => cols.filter(f).sort((a, b) => w(b) - w(a))[0];
+  const sat = x => x.n * x.s * x.s;
+  const primary = best(x => x.l < .36 && x.s > .12, sat) || best(x => x.l < .42);
+  const accent = best(x => x.l >= .3 && x.l <= .65 && x.s > .25 && (!primary || hd(x.h, primary.h) > 30), sat);
+  const leaf = best(x => x.h >= 75 && x.h <= 165 && x.s > .14 && x.l > .18 && x.l < .7, sat);
+  /* تغميق اللون الفاتح حتى يبقى النص الأبيض فوقه مقروءًا */
+  const deep = x => {
+    if (x.l <= .42 && x.s >= .35) return x.hex;
+    const s2 = Math.max(x.s, .4), l2 = Math.min(x.l, .38), C = (1 - Math.abs(2 * l2 - 1)) * s2, X = C * (1 - Math.abs((x.h / 60) % 2 - 1)), m = l2 - C / 2;
+    const [r, g, b] = x.h < 60 ? [C, X, 0] : x.h < 120 ? [X, C, 0] : x.h < 180 ? [0, C, X] : x.h < 240 ? [0, X, C] : x.h < 300 ? [X, 0, C] : [C, 0, X];
+    return rgb2hex([r, g, b].map(v => (v + m) * 255));
+  };
+  const out = {};
+  if (primary) out.navy = primary.hex;
+  if (accent) { out.gold = accent.hex; out.bg = mix(accent.hex, '#ffffff', .93); }
+  if (leaf) out.leaf = deep(leaf);
+  if (primary) out.text = mix(primary.hex, '#000000', .3);
+  return out;
+}
+
 let session = null;
 try { session = JSON.parse(ss.get(SKEY) || 'null'); } catch (e) { /* ignore */ }
 const ui = { pick: null, tab: null, hid: '', date: today(), fh: '', psub: 'personal', msub: 'teachers', shown: {} };
@@ -193,7 +270,7 @@ const ICONS = {
 };
 function loginView() {
   const none = !accounts().length;
-  return `<div class="login"><div class="logo-wrap"><img src="${LOGO}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${LOGO});mask-image:url(${LOGO})"></div></div>
+  return `<div class="login"><div class="logo-wrap"><img src="${logoSrc()}" alt="شعار إدارة الحلقات القرآنية"><div class="sheen" style="-webkit-mask-image:url(${logoSrc()});mask-image:url(${logoSrc()})"></div></div>
   <div class="card loginform"><div id="login">
     <div class="combo"><label>الاسم<input type="text" id="ufilter" placeholder="اكتب أول حروف اسمك" autocomplete="off"></label><div class="results" id="uresults" hidden></div></div>
     <div class="modes" id="umodes" hidden></div>
@@ -275,7 +352,7 @@ function render() {
   if (!tabs.some(t => t[0] === ui.tab)) ui.tab = tabs[0][0];
   const who = ROLE_L[role] + ': ' + me().name;
   const sw = sameName().length ? '<button class="btn" data-act="switchMode">تبديل الوضع</button>' : '';
-  $app.innerHTML = `<header class="top"><div class="brand"><img class="hlogo" src="${LOGO}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div><div class="hactions">${sw}<button class="btn" data-act="logout">خروج</button>${role === 'admin' ? `<button type="button" class="iconbtn ${ui.tab === 'settings' ? 'on' : ''}" data-act="panel" title="لوحة التحكم" aria-label="لوحة التحكم">${ICONS.gear}</button>` : ''}</div></header>
+  $app.innerHTML = `<header class="top"><div class="brand"><img class="hlogo" src="${logoSrc()}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small></div></div><div class="hactions">${sw}<button class="btn" data-act="logout">خروج</button>${role === 'admin' ? `<button type="button" class="iconbtn ${ui.tab === 'settings' ? 'on' : ''}" data-act="panel" title="لوحة التحكم" aria-label="لوحة التحكم">${ICONS.gear}</button>` : ''}</div></header>
   <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'pending' && db.pending.length ? ` <span class="count">${db.pending.length}</span>` : ''}</button>`).join('')}</nav>
   <main>${VIEWS[role][ui.tab]()}</main>`;
 }
@@ -354,7 +431,22 @@ const adminViews = {
     ${db.news.length ? db.news.slice().reverse().map(n => `<div class="news">${esc(n.text)}<br><small>${esc(n.date)} — ${AUD[n.audience] || '—'}</small> <button class="btn sm danger" data-act="delNews" data-id="${n.id}">حذف</button></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
   },
   settings() {
-    return `<div class="card"><h2>الإعدادات</h2>
+    const T = theme();
+    const sw = THEME_KEYS.map(([k, l, h]) => `<label class="sw"><input type="color" data-color="${k}" value="${T[k]}"><span><b>${l}</b><small>${h}</small></span></label>`).join('');
+    const pre = PRESETS.map(([n, c], i) => { const P = { ...THEME0, ...c }; return `<button class="btn preset" data-act="themePreset" data-i="${i}"><i>${[P.navy, P.gold, P.bg].map(x => `<span style="background:${x}"></span>`).join('')}</i>${esc(n)}</button>`; }).join('');
+    return `<div class="card"><h2>المظهر</h2>
+    <div class="appear">
+      <div class="logo-edit"><img class="logo-prev" src="${logoSrc()}" alt="الشعار الحالي">
+        <div class="bar"><label class="btn sm primary" style="margin:0">رفع شعار جديد<input type="file" accept="image/*" data-change="logo" hidden></label>${db.settings.logo ? '<button class="btn sm" data-act="logoReset">الشعار الافتراضي</button>' : ''}</div>
+        <button class="btn sm" style="width:100%" data-act="themeFromLogo">استخراج الألوان من الشعار</button>
+        <p class="muted" style="font-size:.78rem;margin:.5rem 0 0">PNG أو SVG بخلفية شفافة يعطي أفضل نتيجة. يُصغَّر تلقائيًا ويظهر في الشاشة الافتتاحية وصفحة الدخول والشريط العلوي.</p>
+      </div>
+      <div><div class="swatches">${sw}</div>
+        <h3 style="font-size:.95rem;margin:1rem 0 .5rem">أنماط جاهزة</h3><div class="presets">${pre}</div>
+        <div class="row" style="margin-top:1rem"><button class="btn danger" data-act="themeReset">استعادة المظهر الافتراضي</button></div>
+      </div>
+    </div></div>
+    <div class="card"><h2>الإعدادات</h2>
     <div class="note">البيانات تُحفظ في متصفح هذا الجهاز فقط (localStorage). خذ نسخة احتياطية بانتظام، ولا تعتمد على الرموز السرية لحماية بيانات حساسة.</div>
     <div class="bar"><button class="btn" data-act="editSettings">اسم المؤسسة</button>
     <button class="btn" data-act="export">تصدير نسخة احتياطية</button>
@@ -776,6 +868,21 @@ const A = {
     v => { if (!v.text.trim()) return 'اكتب نص الإعلان'; db.news.push({ id: uid(), text: v.text.trim(), audience: v.audience, date: today() }); }),
   delNews: d => { db.news = db.news.filter(n => n.id !== d.id); save(); render(); },
 
+  themePreset: d => { const p = PRESETS[+d.i]; if (!p) return; db.settings.theme = { ...p[1] }; save(); applyTheme(); render(); toast('تم تطبيق نمط «' + p[0] + '»'); },
+  themeReset: () => ask('استعادة الألوان والشعار الافتراضيين؟', () => { db.settings.theme = {}; delete db.settings.logo; save(); applyTheme(); render(); }),
+  logoReset: () => { delete db.settings.logo; save(); applyTheme(); render(); toast('عاد الشعار الافتراضي'); },
+  themeFromLogo: () => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const p = paletteFrom(img);
+        if (!Object.keys(p).length) { toast('لم أجد ألوانًا واضحة في الشعار'); return; }
+        db.settings.theme = { ...(db.settings.theme || {}), ...p }; save(); applyTheme(); render(); toast('تم تطبيق ألوان الشعار');
+      } catch (e) { toast('تعذّر تحليل ألوان الشعار'); }
+    };
+    img.onerror = () => toast('تعذّر تحميل الشعار');
+    img.src = logoSrc();
+  },
   editSettings: () => openForm('الإعدادات', [{ name: 'org', label: 'اسم المؤسسة', value: db.settings.org, required: true }, { type: 'note', label: 'كلمات مرور الإداريين تُدار من تبويب «الأعضاء» ← الإداريون.' }],
     v => { db.settings.org = v.org.trim(); }),
   export: () => {
@@ -820,7 +927,25 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target, c = el.dataset.change;
+  if (el.dataset.color) { save(); return; }
   if (!c) return;
+  if (c === 'logo') {
+    const f = el.files[0]; el.value = '';
+    if (!f || !/^image\//.test(f.type)) { toast('اختر ملف صورة'); return; }
+    const url = URL.createObjectURL(f), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 512 / Math.max(img.naturalWidth || 512, img.naturalHeight || 512)), cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round((img.naturalWidth || 512) * k)); cv.height = Math.max(1, Math.round((img.naturalHeight || 512) * k));
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      let d = cv.toDataURL('image/webp', .9);
+      if (!d.startsWith('data:image/webp')) d = cv.toDataURL('image/png');
+      URL.revokeObjectURL(url);
+      db.settings.logo = d; save(); applyTheme(); render(); toast('تم تحديث الشعار — جرّب «استخراج الألوان من الشعار»');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast('تعذّرت قراءة الصورة'); };
+    img.src = url;
+    return;
+  }
   if (c === 'hid') { ui.hid = el.value; render(); }
   else if (c === 'fh') { ui.fh = el.value; render(); }
   else if (c === 'date') { ui.date = el.value || today(); render(); }
@@ -852,6 +977,8 @@ A.doLogin = () => {
   ui.pick = null; ui.tab = null; ui.hid = ''; render();
 };
 document.addEventListener('input', e => {
+  const ck = e.target.dataset?.color;
+  if (ck) { db.settings.theme = { ...(db.settings.theme || {}), [ck]: e.target.value }; applyTheme(); return; }
   if (e.target.id !== 'ufilter') return;
   ui.pick = null;
   e.target.classList.remove('picked');
@@ -871,6 +998,7 @@ document.addEventListener('keydown', e => {
   else e.target.closest('.modal')?.querySelector('[data-save]')?.click();
 });
 
+applyTheme();
 render();
 const splash = document.getElementById('splash');
 if (splash) {
