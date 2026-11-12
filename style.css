@@ -370,3 +370,40 @@ select.mini{width:auto;padding:.15rem .35rem;font-size:.85rem}
 .btn.loading:disabled{opacity:.9}
 @keyframes btnspin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.btn.loading::before{animation-duration:1.8s}}
+
+/* ===== الجداول: حدود واضحة، ورأس أغلظ، وصفوف متبادلة الألوان ===== */
+:root{--stripe:#e7f2e4;--grid:rgba(19,41,75,.18)}
+table{border:1px solid var(--grid);border-color:color-mix(in srgb,var(--navy) 22%,transparent)}
+th,td{border:1px solid var(--grid);border-color:color-mix(in srgb,var(--navy) 16%,transparent)}
+tr:first-child th{border-bottom:2.5px solid var(--navy);border-top-width:1.5px}
+th{border-color:color-mix(in srgb,var(--navy) 30%,transparent)}
+tr:nth-child(odd):not(:first-child):not(.sum) td{background:var(--stripe);background:color-mix(in srgb,var(--stripe) 85%,transparent)}
+tr.sum td{border-top:2.5px solid var(--navy)}
+.scard th{border:1px solid var(--grid);border-color:color-mix(in srgb,var(--navy) 16%,transparent)}
+@media print{tr:nth-child(odd):not(:first-child):not(.sum) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+
+/* ===== الأرقام الإنجليزية ===== */
+body{font-variant-numeric:lining-nums tabular-nums}
+
+/* ===== زر الخروج الصغير تحت اسم المستخدم ===== */
+.logout-mini{display:inline-flex;align-items:center;gap:.3rem;margin-top:.35rem;padding:.12rem .55rem;font:inherit;font-size:.74rem;color:var(--on-navy);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);border-radius:99px;cursor:pointer;opacity:.85}
+.logout-mini:hover{background:rgba(255,255,255,.2);opacity:1}
+.logout-mini svg{width:13px;height:13px}
+.side-foot .logout-c{display:none}
+@media (min-width:861px){.shell.collapsed .side-foot .logout-c{display:inline-flex}}
+
+/* ===== نافذة تثبيت التطبيق (زجاجية) ===== */
+.overlay.install{background:rgba(10,18,35,.25)}
+.ipop{position:relative;display:flex;flex-direction:column;align-items:center;gap:1.1rem;padding:2rem 2.4rem 1.6rem;border-radius:26px;
+  background:rgba(255,255,255,.55);-webkit-backdrop-filter:blur(24px) saturate(170%);backdrop-filter:blur(24px) saturate(170%);
+  border:1px solid rgba(255,255,255,.75);box-shadow:0 24px 60px rgba(10,18,35,.25);animation:pop .45s cubic-bezier(.2,.8,.2,1) both}
+.ipop img{width:min(46vw,170px);height:auto;filter:drop-shadow(0 6px 16px rgba(10,18,35,.15))}
+.ibtn{display:inline-flex;align-items:center;gap:.5rem;padding:.6rem 1.6rem;font-size:1.05rem;border-radius:14px}
+.ibtn svg{width:20px;height:20px}
+.ipx{position:absolute;top:.5rem;left:.6rem;width:30px;height:30px;border:0;border-radius:50%;background:rgba(255,255,255,.6);color:var(--muted);font-size:1.2rem;line-height:1;cursor:pointer}
+.ipx:hover{background:#fff;color:var(--text)}
+
+/* ===== نافذة الأسماء المتشابهة ===== */
+.dupg{border:1px solid var(--glass-line);border-radius:12px;padding:.6rem .8rem;margin-bottom:.6rem;background:rgba(255,255,255,.45)}
+.dupi{margin:.15rem 0;padding:.25rem .3rem;border-radius:8px}
+.dupi:hover{background:rgba(255,255,255,.7)}
