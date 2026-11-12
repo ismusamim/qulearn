@@ -11,7 +11,7 @@ const LOGO = 'logo.png';
 const KEY = 'halaqat_v1';
 const SKEY = 'halaqat_session';
 const TABS = {
-  admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['pending', 'بيانات معلّقة'], ['teachers', 'المعلمون'], ['halaqat', 'الحلقات'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['settings', 'الإعدادات']],
+  admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['pending', 'بيانات معلّقة'], ['teachers', 'المعلمون'], ['halaqat', 'الحلقات'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['payroll', 'المرتبات'], ['settings', 'الإعدادات']],
   teacher: [['att', 'الحضور'], ['mine', 'طلابي'], ['profile', 'ملفي'], ['news', 'الإعلانات']],
   supervisor: [['att', 'الحضور'], ['mine', 'الطلاب'], ['news', 'الإعلانات']],
   student: [['me', 'تقدمي'], ['hist', 'السجل'], ['news', 'الإعلانات']]
@@ -430,6 +430,7 @@ const adminViews = {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الإعلانات</h2><button class="btn primary" data-act="addNews">+ إعلان</button></div>
     ${db.news.length ? db.news.slice().reverse().map(n => `<div class="news">${esc(n.text)}<br><small>${esc(n.date)} — ${AUD[n.audience] || '—'}</small> <button class="btn sm danger" data-act="delNews" data-id="${n.id}">حذف</button></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
   },
+  payroll: () => window.Payroll ? window.Payroll.view() : `<div class="card">${empty('ملف المرتبات payroll.js غير محمّل.')}</div>`,
   settings() {
     const T = theme();
     const sw = THEME_KEYS.map(([k, l, h]) => `<label class="sw"><input type="color" data-color="${k}" value="${T[k]}"><span><b>${l}</b><small>${h}</small></span></label>`).join('');
@@ -924,9 +925,11 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#ufilter, #uresults')) showResults(false);
   const el = e.target.closest('[data-act]');
   if (el && A[el.dataset.act]) A[el.dataset.act](el.dataset);
+  else if (el && window.Payroll?.act[el.dataset.act]) window.Payroll.act[el.dataset.act](el.dataset);
 });
 document.addEventListener('change', e => {
   const el = e.target, c = el.dataset.change;
+  if (el.dataset.pay && window.Payroll) { window.Payroll.onChange(e); return; }
   if (el.dataset.color) { save(); return; }
   if (!c) return;
   if (c === 'logo') {
@@ -977,6 +980,7 @@ A.doLogin = () => {
   ui.pick = null; ui.tab = null; ui.hid = ''; render();
 };
 document.addEventListener('input', e => {
+  if (e.target.dataset?.pay && window.Payroll) { window.Payroll.onInput(e); return; }
   const ck = e.target.dataset?.color;
   if (ck) { db.settings.theme = { ...(db.settings.theme || {}), [ck]: e.target.value }; applyTheme(); return; }
   if (e.target.id !== 'ufilter') return;
@@ -997,6 +1001,9 @@ document.addEventListener('keydown', e => {
   else if (e.target.closest('#login')) A.doLogin();
   else e.target.closest('.modal')?.querySelector('[data-save]')?.click();
 });
+
+/* واجهة للوحدات الإضافية (مثل المرتبات) */
+window.QL = { get db() { return db; }, save, render, openForm, openInfo, ask, toast, esc, uid, today, byId, norm, empty };
 
 applyTheme();
 render();

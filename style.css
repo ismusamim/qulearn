@@ -155,3 +155,26 @@ label.sw input[type=color]:focus{outline-offset:2px}
 .preset{display:inline-flex;align-items:center;gap:.5rem}
 .preset i{display:inline-flex;padding-inline-start:4px}
 .preset i span{width:16px;height:16px;border-radius:50%;margin-inline-start:-5px;border:2px solid #fff;box-shadow:0 0 0 1px var(--line)}
+
+/* ===== المرتبات ===== */
+.paytbl table{font-size:.88rem}
+.paytbl th{white-space:normal;line-height:1.25;font-size:.8rem;padding:.4rem .3rem;text-align:center}
+.paytbl td{padding:.3rem .3rem;text-align:center;white-space:nowrap}
+.paytbl td.nm{text-align:right}
+.paytbl input.num{width:4.4rem;padding:.22rem .3rem;text-align:center;font-size:.88rem;margin:0}
+td.net{font-weight:700;color:var(--navy)}
+tr.sum td{font-weight:700;background:var(--gold-l);color:var(--navy-d)}
+.tag.lock{background:var(--navy);color:var(--on-navy)}
+.lnk{background:none;border:0;padding:0;font:inherit;color:var(--navy);cursor:pointer;text-decoration:underline;text-decoration-color:var(--gold)}
+.print-only{display:none}
+@media print{
+  .noprint,.toast,.overlay{display:none!important}
+  .print-only{display:block;text-align:center;margin-bottom:.6rem}
+  body{background:#fff}
+  .card{border:0;padding:0}
+  .paytbl input.num{border:0;width:auto;background:none;-moz-appearance:textfield}
+  .paytbl{overflow:visible}
+  .paytbl table{font-size:9pt}
+  @page{size:landscape;margin:8mm}
+}
+main:has(.paytbl){max-width:1500px}
