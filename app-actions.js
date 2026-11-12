@@ -191,7 +191,7 @@ const A = {
     if (!list.length) { toast('كل الأعضاء لهم حسابات'); return; }
     ask(`إنشاء حسابات دخول لـ ${list.length} عضو؟ ستظهر كلمات المرور مرة واحدة لتسليمها.`, () => cloudMakeLogins(list));
   },
-  cloudSync: () => cloudRefresh(true, true),
+  cloudSync: () => cloudRefresh(true, true, true),
   cloudTest: () => cloudTest(),
   cloudUpload: () => cloudUploadLocal(),
   cloudMerge: () => openForm('دمج نسخة احتياطية في قاعدة البيانات', [{ type: 'note', label: 'تُضاف بيانات النسخة إلى قاعدة البيانات دون حذف شيء منها. لا تدمج النسخة نفسها مرتين حتى لا تتكرر البيانات.' }, { name: 'json', label: 'الصق نص النسخة الاحتياطية هنا', type: 'textarea', required: true }], v => {
@@ -231,8 +231,9 @@ document.addEventListener('click', e => {
   if (e.target.id === 'ufilter') showResults();
   if (!e.target.closest('#ufilter, #uresults')) showResults(false);
   const el = e.target.closest('[data-act]');
-  if (el && A[el.dataset.act]) A[el.dataset.act](el.dataset);
-  else if (el && window.Payroll?.act[el.dataset.act]) window.Payroll.act[el.dataset.act](el.dataset);
+  if (el && el.classList.contains('loading')) return;
+  if (el && A[el.dataset.act]) withBusy(el, A[el.dataset.act](el.dataset));
+  else if (el && window.Payroll?.act[el.dataset.act]) withBusy(el, window.Payroll.act[el.dataset.act](el.dataset));
 });
 document.addEventListener('change', e => {
   const el = e.target, c = el.dataset.change;
@@ -280,7 +281,7 @@ A.doLogin = () => {
   }
   const pin = document.querySelector('#login input[name=pin]').value;
   const p = ui.pick, cur = p.accts[p.sel];
-  if (CLOUD) { cloudLogin(cur, pin); return; }
+  if (CLOUD) return cloudLogin(cur, pin);
   /* الوضع المختار أولًا، وإن لم تطابق كلمته جُرّبت بقية حسابات الاسم نفسه */
   const acc = cur.u.pin === pin ? cur : p.accts.find(a => a.u.pin === pin);
   if (!pin || !acc) { toast('كلمة المرور غير صحيحة'); return; }
@@ -336,7 +337,7 @@ document.addEventListener('keydown', e => {
     if (ui.pick) document.querySelector('#login input[name=pin]')?.focus();
     else if (m.length === 1) pickUser(m[0]);
   }
-  else if (e.target.closest('#login')) A.doLogin();
+  else if (e.target.closest('#login')) { const b = document.querySelector('[data-act=doLogin]'); if (!b?.classList.contains('loading')) withBusy(b, A.doLogin()); }
   else e.target.closest('.modal')?.querySelector('[data-save]')?.click();
 });
 
@@ -363,7 +364,6 @@ function cloudLookup(q) {
 ui.lkSeq = 0;
 async function cloudLogin(cur, pin) {
   if (!pin) { toast('اكتب كلمة المرور'); return; }
-  const btn = document.querySelector('[data-act=doLogin]'); if (btn) { btn.disabled = true; btn.textContent = 'جارٍ الدخول…'; }
   try {
     await window.Cloud.signIn(cur.u.email, pin);
     window.Cloud.setMember({ role: cur.role, id: cur.u.id });
@@ -374,11 +374,11 @@ async function cloudLogin(cur, pin) {
     await cloudRefresh(true);
   } catch (err) {
     toast(navigator.onLine === false ? 'لا يوجد اتصال بالإنترنت' : (err.message || 'تعذّر الدخول'));
-    if (btn) { btn.disabled = false; btn.textContent = 'دخول'; }
   }
 }
 /* سحب أحدث البيانات (بعد إرسال التغييرات المحلية)؛ لا يقاطع نموذجًا مفتوحًا أو حقلًا قيد الكتابة */
-async function cloudRefresh(force = false, loud = false) {
+async function cloudRefresh(force = false, loud = false, wait = false) {
+  if (wait) for (let i = 0; ui.refreshing && i < 100; i++) await new Promise(r => setTimeout(r, 100));
   if (!CLOUD || !window.Cloud.signedIn || !session || ui.refreshing) return;
   const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && document.activeElement.closest('main');
   if (!force && (document.querySelector('.overlay') || typing)) return;
@@ -486,10 +486,11 @@ function cloudUploadLocal() {
     <div class="row"><button class="btn primary" data-yes>رفع</button><button class="btn" data-close>إلغاء</button></div></div>`;
   document.body.appendChild(ov);
   ov.querySelector('[data-close]').onclick = () => ov.remove();
-  ov.querySelector('[data-yes]').onclick = () => {
-    const skip = ov.querySelector('#skipdemo').checked; ov.remove();
+  ov.querySelector('[data-yes]').onclick = e => {
+    const skip = ov.querySelector('#skipdemo').checked;
+    ov.querySelector('[data-close]').disabled = true;
     const n = cloudMergeInto(migrateLocalCopy(d), skip);
-    toast(`سيُرفع ${n} سجلًا — بعد اكتمال الرفع أنشئ حسابات الدخول من «الأعضاء»`);
+    withBusy(e.currentTarget, window.Cloud.push(db).then(() => toast(`تم رفع ${n} سجلًا — أنشئ حسابات الدخول من «الأعضاء»`), err => toast('تعذّر الرفع: ' + (err.message || err)))).finally(() => ov.remove());
   };
 }
 async function cloudTest() {
