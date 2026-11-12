@@ -20,6 +20,26 @@
     /* الأرقام إنجليزية دائمًا: كروم يعرض أرقام خانات الأرقام والتاريخ بلغة الصفحة (العربية)، فنجعل لغة هذه الخانات إنجليزية */
     new MutationObserver(() => document.querySelectorAll('input[type=number]:not([lang]),input[type=date]:not([lang]),input[type=tel]:not([lang])')
       .forEach(i => { i.lang = i.type === 'date' ? 'en-GB' : 'en'; })).observe(document.documentElement, { childList: true, subtree: true });
+    /* كلمات المرور: حروف إنجليزية وأرقام ورموز فقط؛ الحرف العربي يُحذف فورًا ويظهر تحت الخانة سطر أحمر «اكتب بالإنجليزية» */
+    document.addEventListener('input', e => {
+      const t = e.target;
+      if (!t || t.tagName !== 'INPUT' || !(t.type === 'password' || t.dataset.eye)) return;
+      const v = t.value.replace(/[\u0660-\u0669]/g, c => c.charCodeAt(0) - 1632).replace(/[\u06f0-\u06f9]/g, c => c.charCodeAt(0) - 1776);
+      const clean = v.replace(/[^\x21-\x7E]/g, '');
+      if (clean === t.value) return;
+      const pos = Math.max(0, (t.selectionStart || 0) - (t.value.length - clean.length));
+      t.value = clean; try { t.setSelectionRange(pos, pos); } catch (err) { /* ignore */ }
+      if (clean.length === v.length) return;
+      const host = t.closest('.pwwrap') || t;
+      let w = host.nextElementSibling;
+      if (!w || !w.classList.contains('pw-warn')) {
+        w = document.createElement('small'); w.className = 'pw-warn'; w.setAttribute('role', 'alert'); w.textContent = 'اكتب بالإنجليزية';
+        w.style.cssText = 'display:block;margin-top:.3rem;padding-top:.25rem;border-top:2px solid var(--red,#b3372f);color:var(--red,#b3372f);font-size:.82rem;font-weight:700';
+        host.after(w);
+      }
+      t.style.borderColor = 'var(--red,#b3372f)';
+      clearTimeout(w._h); w._h = setTimeout(() => { w.remove(); t.style.borderColor = ''; }, 3000);
+    }, true);
   </script>
   <script src="cloud.js"></script>
   <script src="payroll.js"></script>
