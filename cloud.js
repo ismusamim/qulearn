@@ -119,7 +119,7 @@ async function provision(items, onProgress) {
 /* ---------------- التحويل بين بيانات التطبيق وجداول الخادم ---------------- */
 const nz = v => (v === '' || v === undefined ? null : v);
 const num = v => (v === '' || v === undefined || v === null || isNaN(+v) ? null : +v);
-const ROLE_COLL = { admin: 'admins', supervisor: 'supervisors', teacher: 'teachers', student: 'students' };
+const ROLE_COLL = { admin: 'admins', supervisor: 'supervisors', teacher: 'teachers', student: 'students', accountant: 'accountants' };
 
 function memberRow(m, role) {
   return {
@@ -138,7 +138,7 @@ function groups(db) {
   /* priv_*: إعدادات خاصة بالمدير (مثل فئات الاشتراكات وخصوماتها) لا يقرؤها غيره على الخادم */
   add('settings', 'settings', ['key'], ['org', 'theme', 'logo', 'priv_fees', 'priv_perms'].filter(k => db.settings?.[k] !== undefined).map(k => ({ key: k, value: db.settings[k] ?? null })));
   add('places', 'places', ['id'], (db.places || []).map(p => ({ id: p.id, name: p.name, type: p.type || 'مسجد', address: p.address || '' })));
-  add('staff', 'members', ['id'], ['admin', 'supervisor', 'teacher'].flatMap(r => (db[ROLE_COLL[r]] || []).map(m => memberRow(m, r))));
+  add('staff', 'members', ['id'], ['admin', 'supervisor', 'teacher', 'accountant'].flatMap(r => (db[ROLE_COLL[r]] || []).map(m => memberRow(m, r))));
   add('halaqat', 'halaqat', ['id'], (db.halaqat || []).map(h => ({ id: h.id, name: h.name || '', teacher_id: nz(h.teacherId), supervisor_id: nz(h.supervisorId), place_id: nz(h.placeId), time: h.time || null })));
   add('students', 'members', ['id'], (db.students || []).map(m => memberRow(m, 'student')));
   add('member_admin', 'member_admin', ['member_id'], (db.teachers || []).filter(t => t.admin && Object.keys(t.admin).length).map(t => ({ member_id: t.id, data: t.admin })));
@@ -203,7 +203,7 @@ function ensureUuids(db) {
 
 /* ---------------- السحب من الخادم ---------------- */
 function emptyDb() {
-  return { settings: { org: 'إدارة الحلقات القرآنية' }, admins: [], supervisors: [], teachers: [], students: [], places: [], halaqat: [], attendance: [], records: [], news: [], fields: { students: [], teachers: [] }, pending: [] };
+  return { settings: { org: 'إدارة الحلقات القرآنية' }, admins: [], supervisors: [], teachers: [], accountants: [], students: [], places: [], halaqat: [], attendance: [], records: [], news: [], fields: { students: [], teachers: [] }, pending: [] };
 }
 /* ---------------- المزامنة بالتغييرات فقط ----------------
    أول جلب في الجلسة (وكل 30 دقيقة) كامل، وما بينهما يُجلب فقط ما تغيّر منذ آخر مرة (عمود sync_ts)
@@ -223,6 +223,8 @@ const photoSent = new Map();    // معرّف العضو ← بصمة الصور
 const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return s.length + ':' + h; };
 const pkOf = (t, r) => SYNC_TABLES[t].map(k => r[k]).join('|');
 function tablesFor(role) {
+  /* المحاسب: الطلاب والحلقات والأماكن والاشتراكات والإعلانات فقط */
+  if (role === 'accountant') return ['settings', 'places', 'members', 'halaqat', 'news', 'fees'];
   const t = ['settings', 'places', 'members', 'member_admin', 'halaqat', 'attendance', 'records', 'news', 'custom_fields'];
   if (role === 'admin') t.push('pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns', 'fees');
   else if (role === 'supervisor') t.push('absences');
@@ -301,12 +303,12 @@ async function pull() {
   db.halaqat = halaqat.map(h => ({ id: h.id, name: h.name || '', teacherId: h.teacher_id || '', supervisorId: h.supervisor_id || '', placeId: h.place_id || '', time: h.time || undefined }));
   db.attendance = attendance.map(a => ({ id: a.id, studentId: a.student_id, date: a.date, status: a.status }));
   db.records = records.map(r => ({ id: r.id, studentId: r.student_id, date: r.date, type: r.type, surah: r.surah, from: r.from_ayah, to: r.to_ayah, grade: r.grade || '', note: r.note || '' }));
-  db.news = news.map(n => ({ id: n.id, text: n.text, audience: n.audience, date: n.date }));
+  db.news = news.map(n => ({ id: n.id, text: n.text, audience: n.audience, date: n.date, author: n.author || '', authorId: n.author_id || '' }));
   fields.forEach(f => { (db.fields[f.kind] = db.fields[f.kind] || []).push({ key: f.key, label: f.label, type: f.type }); });
   if (role === 'admin') {
     const [ps, emps, prow, closed, abs, pend] = ['pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns'].map(rows);
     db.pending = pend.map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date }));
-    db.fees = rows('fees').map(f => ({ id: f.id, studentId: f.student_id, y: f.y, m: f.m, amount: +f.amount, date: f.date || '', by: f.by_name || '', note: f.note || '' }));
+    db.fees = feeRows(rows('fees'));
     db.payroll = {
       settings: ps[0]?.data || {},
       employees: emps.map(e => ({ id: e.id, code: e.code || '', name: e.name, role: e.role || '', sys: e.sys || '', status: e.status, basic: e.basic, rate: e.rate, incentive: e.incentive, transport: e.transport, hours: e.hours, place: e.place || '', note: e.note || '' })),
@@ -314,6 +316,13 @@ async function pull() {
       closed: closed.map(c => c.y + '-' + c.m),
       absences: abs.map(absFromRow)
     };
+  } else if (role === 'accountant') {
+    db.fees = feeRows(rows('fees'));
+    /* أسماء المعلمين والمشرفين لتسمية الحلقات فقط: تُجلب عند الجلب الكامل أو تغيّر الأعضاء */
+    if (mode === 'full' || !raw.staffNames || !scoped || chk.tables.includes('members')) {
+      try { raw.staffNames = (await rpc('staff_names')) || []; lastChanged = true; } catch (e) { raw.staffNames = raw.staffNames || []; }
+    }
+    raw.staffNames.forEach(m => { const c = db[ROLE_COLL[m.role]]; if (c && !c.some(x => x.id === m.id)) c.push({ id: m.id, name: m.name, phone: '', extra: {} }); });
   } else if (role === 'supervisor') {
     /* قائمة العاملين وشهر المرتبات الحالي: تُجلب عند الجلب الكامل أو إن تغيّرت فقط */
     if (mode === 'full' || !raw.extras || !scoped || chk.tables.includes('staff')) { raw.extras = await Promise.all([rpc('staff_list'), rpc('current_pay_month').catch(() => null)]); lastChanged = true; }
@@ -335,6 +344,7 @@ async function pull() {
   lastSync = new Date(); lastError = ''; emit();
   return db;
 }
+const feeRows = list => list.map(f => ({ id: f.id, studentId: f.student_id, y: f.y, m: f.m, amount: +f.amount, date: f.date || '', by: f.by_name || '', byMember: f.by_member || '', note: f.note || '' }));
 const absFromRow = a => ({ id: a.id, y: a.y, m: a.m, date: a.date || '', eid: a.emp_id, name: a.name || '', place: a.place || '', perm: a.perm || '', reason: a.reason || '', proof: a.proof || '', note: a.note || '', by: a.by_name || '', byMember: a.by_member || '', ts: a.created_at });
 
 /* ---------------- الإرسال: الفروق فقط ---------------- */
@@ -342,6 +352,7 @@ const ALLOWED = {
   admin: null, // الكل
   teacher: ['attendance', 'records'],
   supervisor: ['attendance', 'records', 'absences'],
+  accountant: ['students', 'fees'],
   student: []
 };
 /* مقارنة لا تتأثر بترتيب الحقول: قاعدة البيانات تعيد ترتيب حقول JSON (مثل إعدادات المرتبات)،
