@@ -18,10 +18,22 @@
   const fees = () => (Array.isArray(db.fees) ? db.fees : (db.fees = []));
   const money = n => (Math.round((+n || 0) * 100) / 100).toLocaleString('en-US');
   /* الفئات والخصومات: تُحفظ في الإعدادات بمفتاح خاص لا يقرؤه إلا المدير */
-  const DEF_DISCS = [['d_tahfeez', 'أبناء موظفي التحفيظ'], ['d_assoc', 'أبناء موظفي الجمعية'], ['d_special', 'حالات خاصة']].map(([id, name]) => ({ id, name, type: 'pct', value: 0 }));
-  const cfg = () => { const c = db.settings.priv_fees || {}; return { cats: Array.isArray(c.cats) ? c.cats : [], discs: Array.isArray(c.discs) ? c.discs : DEF_DISCS }; };
+  /* «أيتام» معفى كامل، و«حالات خاصة» تُحدَّد قيمتها لكل طالب على حدة (each) */
+  const ORPHAN = { id: 'd_orphan', name: 'أيتام', type: 'pct', value: 100 };
+  const DEF_DISCS = [{ id: 'd_tahfeez', name: 'أبناء موظفي التحفيظ', type: 'pct', value: 0 }, { id: 'd_assoc', name: 'أبناء موظفي الجمعية', type: 'pct', value: 0 }, ORPHAN, { id: 'd_special', name: 'حالات خاصة', type: 'pct', value: 0, each: true }];
+  const cfg = () => {
+    const c = db.settings.priv_fees || {};
+    let discs = Array.isArray(c.discs) ? c.discs : DEF_DISCS;
+    /* إعدادات حُفظت قبل إضافة «أيتام»: يُضاف، و«حالات خاصة» تصبح لكل طالب على حدة */
+    if (Array.isArray(c.discs) && !c.v) {
+      discs = discs.map(d => (d.id === 'd_special' ? { ...d, each: true } : d));
+      if (!discs.some(d => d.id === ORPHAN.id)) discs = [...discs.filter(d => d.id !== 'd_special'), ORPHAN, ...discs.filter(d => d.id === 'd_special')];
+    }
+    return { cats: Array.isArray(c.cats) ? c.cats : [], discs };
+  };
   const isNum = v => v !== '' && v != null && !isNaN(+v);
-  const discTxt = (d, v) => (d.type === 'amt' ? money(v) + ' جنيه' : v + '%');
+  const discTxt = (d, v, t) => ((t || d.type) === 'amt' ? money(v) + ' جنيه' : v + '%');
+  const discLabel = d => (d.each ? `${d.name} (يُحدَّد لكل طالب)` : `${d.name} (${discTxt(d, d.value)})`);
   /* المستحق = (المبلغ الخاص للطالب، أو مبلغ فئته، أو الفئة الافتراضية لسنّه) − الخصم */
   function dueOf(s) {
     const I = s?.info || {}, C = cfg();
@@ -35,9 +47,9 @@
     const d = C.discs.find(x => x.id === I.feeDisc);
     let off = 0, dl = '';
     if (d) {
-      const v = isNum(I.feeDiscVal) ? +I.feeDiscVal : (+d.value || 0);
-      off = Math.min(base, Math.max(0, d.type === 'amt' ? v : base * v / 100));
-      dl = `${d.name} (${discTxt(d, v)})`;
+      const own = isNum(I.feeDiscVal), v = own ? +I.feeDiscVal : (d.each ? 0 : +d.value || 0), t = own ? (I.feeDiscType || d.type) : d.type;
+      off = Math.min(base, Math.max(0, t === 'amt' ? v : base * v / 100));
+      dl = d.each && !own ? `${d.name} (لم تُحدَّد قيمته)` : `${d.name} (${discTxt(d, v, t)})`;
     }
     return { base, src, off, dl, due: Math.round((base - off) * 100) / 100 };
   }
@@ -141,7 +153,8 @@
     const catRow = (c, i) => `<tr><td><input data-c="name" data-i="${i}" value="${esc(c.name)}" placeholder="مثال: الصغار"></td><td><input type="number" min="0" data-c="amount" data-i="${i}" value="${esc(c.amount ?? '')}" style="width:7rem"></td>
       <td><select data-c="def" data-i="${i}"><option value="">—</option><option value="child" ${c.def === 'child' ? 'selected' : ''}>الصغار</option><option value="adult" ${c.def === 'adult' ? 'selected' : ''}>الكبار</option></select></td><td><button type="button" class="btn sm danger" data-cdel="${i}">حذف</button></td></tr>`;
     const discRow = (d, i) => `<tr><td><input data-d="name" data-i="${i}" value="${esc(d.name)}"></td><td><select data-d="type" data-i="${i}"><option value="pct" ${d.type !== 'amt' ? 'selected' : ''}>نسبة %</option><option value="amt" ${d.type === 'amt' ? 'selected' : ''}>مبلغ ثابت (جنيه)</option></select></td>
-      <td><input type="number" min="0" data-d="value" data-i="${i}" value="${esc(d.value ?? '')}" style="width:7rem"></td><td><button type="button" class="btn sm danger" data-ddel="${i}">حذف</button></td></tr>`;
+      <td><input type="number" min="0" data-d="value" data-i="${i}" value="${d.each ? '' : esc(d.value ?? '')}" style="width:7rem" ${d.each ? 'disabled placeholder="لكل طالب"' : ''}></td>
+      <td style="text-align:center"><input type="checkbox" data-each="${i}" ${d.each ? 'checked' : ''} aria-label="تُحدَّد القيمة لكل طالب"></td><td><button type="button" class="btn sm danger" data-ddel="${i}">حذف</button></td></tr>`;
     const used = (k, id) => db.students.filter(x => (x.info || {})[k] === id).length;
     const draw = () => {
       ov.innerHTML = `<div class="modal wide"><h2>الفئات والخصومات</h2>
@@ -150,14 +163,17 @@
         <div class="tbl"><table><tr><th>اسم الفئة</th><th>المبلغ (جنيه)</th><th>الافتراضية لـ</th><th></th></tr>${C.cats.map(catRow).join('') || '<tr><td colspan="4" class="muted">لا توجد فئات بعد.</td></tr>'}</table></div>
         <div class="row" style="margin:.4rem 0 1rem"><button type="button" class="btn sm" data-cadd>+ فئة</button></div>
         <h3 style="font-size:1rem;margin:.4rem 0">الخصومات</h3>
-        <div class="tbl"><table><tr><th>اسم الخصم</th><th>النوع</th><th>القيمة</th><th></th></tr>${C.discs.map(discRow).join('') || '<tr><td colspan="4" class="muted">لا توجد خصومات.</td></tr>'}</table></div>
+        <div class="tbl"><table><tr><th>اسم الخصم</th><th>النوع</th><th>القيمة</th><th>لكل طالب</th><th></th></tr>${C.discs.map(discRow).join('') || '<tr><td colspan="5" class="muted">لا توجد خصومات.</td></tr>'}</table></div>
+        <p class="muted" style="font-size:.85rem;margin:.3rem 0 0">«لكل طالب»: لا قيمة عامة للخصم، وتُحدَّد قيمته ونوعه لكل طالب من زر «الفئة» (مثل الحالات الخاصة). خصم 100% يجعل الطالب معفى.</p>
         <div class="row" style="margin:.4rem 0 1rem"><button type="button" class="btn sm" data-dadd>+ خصم</button></div>
         <div class="row"><button type="button" class="btn primary" data-save>حفظ</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
     };
     const read = () => {
       ov.querySelectorAll('[data-c]').forEach(x => { C.cats[+x.dataset.i][x.dataset.c] = x.dataset.c === 'amount' ? (x.value === '' ? '' : +x.value) : x.value.trim(); });
       ov.querySelectorAll('[data-d]').forEach(x => { C.discs[+x.dataset.i][x.dataset.d] = x.dataset.d === 'value' ? (x.value === '' ? '' : +x.value) : x.value.trim(); });
+      ov.querySelectorAll('[data-each]').forEach(x => { const d = C.discs[+x.dataset.each]; d.each = x.checked; if (d.each) d.value = 0; });
     };
+    ov.addEventListener('change', e => { if (e.target.matches('[data-each]')) { read(); draw(); } });
     draw(); document.body.appendChild(ov);
     ov.addEventListener('click', e => {
       const t = e.target;
@@ -174,10 +190,10 @@
       if (t.matches('[data-save]')) {
         read();
         if (C.cats.some(c => !c.name || !isNum(c.amount) || +c.amount < 0)) { toast('أكمل اسم كل فئة ومبلغها'); return; }
-        if (C.discs.some(d => !d.name || !isNum(d.value) || +d.value < 0)) { toast('أكمل اسم كل خصم وقيمته'); return; }
+        if (C.discs.some(d => !d.name || (!d.each && (!isNum(d.value) || +d.value < 0)))) { toast('أكمل اسم كل خصم وقيمته'); return; }
         if (C.discs.some(d => d.type !== 'amt' && +d.value > 100)) { toast('نسبة الخصم لا تزيد على 100%'); return; }
         if (['child', 'adult'].some(k => C.cats.filter(c => c.def === k).length > 1)) { toast('فئة افتراضية واحدة فقط للصغار وواحدة للكبار'); return; }
-        db.settings.priv_fees = { cats: C.cats.map(c => ({ ...c, amount: +c.amount })), discs: C.discs.map(d => ({ ...d, value: +d.value })) };
+        db.settings.priv_fees = { v: 2, cats: C.cats.map(c => ({ ...c, amount: +c.amount })), discs: C.discs.map(d => ({ ...d, value: d.each ? 0 : +d.value, each: !!d.each })) };
         ov.remove(); save(); render(); toast('حُفظت الفئات والخصومات');
       }
     });
@@ -191,8 +207,10 @@
     const ov = document.createElement('div'); ov.className = 'overlay';
     ov.innerHTML = `<div class="modal"><h2>${one ? 'فئة واشتراك: ' + esc(list[0].name) : `تعيين لـ${list.length} طالبًا من نتائج البحث`}</h2>
       <label>الفئة<select name="cat">${keep}${sel(I.feeCat || '', [['', 'حسب الافتراضي لسنّه'], ...C.cats.map(c => [c.id, `${c.name} — ${money(c.amount)} جنيه`])])}</select></label>
-      <label>الخصم<select name="disc">${keep}${sel(I.feeDisc || '', [['', 'بلا خصم'], ...C.discs.map(d => [d.id, `${d.name} (${discTxt(d, d.value)})`])])}</select></label>
-      <label>قيمة خصم خاصة بـ${one ? 'هذا الطالب' : 'هؤلاء الطلاب'} (اختياري)<input type="number" min="0" name="dval" value="${one && isNum(I.feeDiscVal) ? esc(I.feeDiscVal) : ''}" placeholder="${one ? 'تُستخدم قيمة الخصم العامة' : 'اتركه فارغًا لعدم التغيير'}"></label>
+      <label>الخصم<select name="disc">${keep}${sel(I.feeDisc || '', [['', 'بلا خصم'], ...C.discs.map(d => [d.id, discLabel(d)])])}</select></label>
+      <div class="two"><label>قيمة خصم خاصة بـ${one ? 'هذا الطالب' : 'هؤلاء الطلاب'}<input type="number" min="0" name="dval" value="${one && isNum(I.feeDiscVal) ? esc(I.feeDiscVal) : ''}" placeholder="${one ? 'فارغ = قيمة الخصم العامة' : 'فارغ = بلا تغيير'}"></label>
+      <label>نوعها<select name="dtype"><option value="pct" ${I.feeDiscType !== 'amt' ? 'selected' : ''}>نسبة %</option><option value="amt" ${I.feeDiscType === 'amt' ? 'selected' : ''}>مبلغ (جنيه)</option></select></label></div>
+      <p class="muted" style="font-size:.82rem;margin:-.3rem 0 .6rem">مطلوبة لـ«حالات خاصة» وكل خصم يُحدَّد لكل طالب؛ واختيارية لغيرها.</p>
       ${one ? `<label>مبلغ خاص يتجاوز الفئة (اختياري)<input type="number" min="0" name="fee" value="${isNum(I.fee) ? esc(I.fee) : ''}" placeholder="فارغ = مبلغ الفئة"></label>` : ''}
       ${!C.cats.length ? '<p class="note">لم تُضف فئات بعد: أضفها من «الفئات والخصومات».</p>' : ''}
       <div class="row"><button type="button" class="btn primary" data-save>حفظ</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
@@ -200,13 +218,14 @@
     ov.querySelector('[data-close]').onclick = () => ov.remove();
     ov.querySelector('[data-save]').onclick = () => {
       const v = n => ov.querySelector(`[name=${n}]`)?.value ?? '';
-      const disc = C.discs.find(d => d.id === v('disc')), dval = v('dval');
-      if (dval !== '' && (+dval < 0 || (disc?.type !== 'amt' && +dval > 100 && v('disc') !== '__keep'))) { toast('قيمة الخصم غير صحيحة'); return; }
+      const disc = C.discs.find(d => d.id === v('disc')), dval = v('dval'), dtype = v('dtype');
+      if (disc?.each && dval === '') { toast(`حدّد قيمة خصم «${disc.name}» ونوعه لـ${one ? 'هذا الطالب' : 'هؤلاء الطلاب'}`); return; }
+      if (dval !== '' && (+dval < 0 || (dtype === 'pct' && +dval > 100))) { toast('قيمة الخصم غير صحيحة'); return; }
       list.forEach(s => {
         s.info = s.info || {};
         if (v('cat') !== '__keep') s.info.feeCat = v('cat');
         if (v('disc') !== '__keep') { s.info.feeDisc = v('disc'); if (!v('disc')) s.info.feeDiscVal = ''; }
-        if (one || dval !== '') s.info.feeDiscVal = dval === '' ? '' : +dval;
+        if (one || dval !== '') { s.info.feeDiscVal = dval === '' ? '' : +dval; s.info.feeDiscType = dval === '' ? '' : dtype; }
         if (one) s.info.fee = v('fee') === '' ? '' : +v('fee');
       });
       ov.remove(); save(); render(); toast(one ? 'حُفظ' : `عُيّن لـ${list.length} طالبًا`);
