@@ -445,7 +445,6 @@ th.selc,td.selc{width:2.2rem;text-align:center}
   #printzone tr{break-inside:avoid}
 }
 
-
 /* ===== تثبيت رأس الجدول وأعمدة المسلسل والاسم ===== */
 main .tbl{max-height:calc(100vh - 170px);overflow:auto}
 table.frz{border-collapse:separate;border-spacing:0}
@@ -469,4 +468,8 @@ table.frz .stk-h.stk-c{z-index:4}
 /* ===== الأزرار البيضاء: إطار بلون الموقع ===== */
 main .btn:not(.primary):not(.on):not(.danger),.modal .btn:not(.primary):not(.on):not(.danger),.mode:not(.on){border-color:color-mix(in srgb,var(--navy) 42%,transparent)}
 main .btn.danger,.modal .btn.danger{border-color:color-mix(in srgb,var(--red) 55%,transparent)}
+
+/* ===== الأداء: بلا تأثير زجاجي خلف الجداول (التمويه يُعاد رسمه مع كل تمرير وكتابة) ===== */
+.card:has(.tbl){-webkit-backdrop-filter:none;backdrop-filter:none;background:rgba(255,255,255,.9);background:color-mix(in srgb,var(--bg) 35%,#fff)}
+main .tbl{contain:paint}
 
