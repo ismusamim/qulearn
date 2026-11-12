@@ -149,7 +149,7 @@ function groups(db) {
     add('pay_employees', 'pay_employees', ['id'], (P.employees || []).map(e => ({ id: e.id, code: nz(e.code), name: e.name, role: nz(e.role), sys: nz(e.sys), status: e.status === 'متوقف' ? 'متوقف' : 'نشط', basic: num(e.basic), rate: num(e.rate), incentive: num(e.incentive), transport: num(e.transport), hours: num(e.hours), place: nz(e.place), note: nz(e.note) })));
     add('pay_rows', 'pay_rows', ['id'], (P.rows || []).map(r => ({ id: r.id, y: +r.y, m: +r.m, emp_id: r.eid, name: nz(r.name), role: nz(r.role), base: num(r.base), extra: num(r.extra), exc: num(r.exc), abs_p: num(r.absP), abs_n: num(r.absN), mtg_p: num(r.mtgP), mtg_n: num(r.mtgN), d_test: num(r.dTest), d_rec: num(r.dRec), d_books: num(r.dBooks), basic: num(r.basic), rate: num(r.rate), incentive: num(r.incentive), transport: num(r.transport), note: r.note || '' })));
     add('pay_closed', 'pay_closed', ['y', 'm'], (P.closed || []).map(k => { const [y, m] = String(k).split('-').map(Number); return { y, m }; }).filter(x => x.y && x.m));
-    add('absences', 'absences', ['id'], (P.absences || []).map(a => ({ id: a.id, y: +a.y, m: +a.m, date: a.date, emp_id: a.eid, name: nz(a.name), place: nz(a.place), perm: a.perm || '', reason: nz(a.reason), proof: a.proof || '', note: nz(a.note), by_member: isUuid(a.byMember) ? a.byMember : null, by_name: nz(a.by) })));
+    add('absences', 'absences', ['id'], (P.absences || []).map(a => ({ id: a.id, y: +a.y, m: +a.m, date: a.date || null, emp_id: a.eid, name: nz(a.name), place: nz(a.place), perm: a.perm || '', reason: nz(a.reason), proof: a.proof || '', note: nz(a.note), by_member: isUuid(a.byMember) ? a.byMember : null, by_name: nz(a.by) })));
   }
   return g;
 }
@@ -161,8 +161,23 @@ function snapshotOf(db) {
 }
 
 /* المعرّفات القديمة (غير UUID) تُستبدل بمعرّفات جديدة مع تحديث كل الإشارات إليها */
+/* معرّف ثابت للمعرّفات القديمة: نفس المعرّف القديم يعطي دائمًا نفس الرمز، فاستيراد الملف نفسه مرة ثانية يحدّث السجلات بدل تكرارها */
+function stableUuid(s) {
+  let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+  const str = 'qulearn:' + s;
+  for (let i = 0, k; i < str.length; i++) {
+    k = str.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067); h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213); h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067); h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213); h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+  h1 ^= h2 ^ h3 ^ h4; h2 ^= h1; h3 ^= h1; h4 ^= h1;
+  const x = [h1, h2, h3, h4].map(v => (v >>> 0).toString(16).padStart(8, '0')).join('');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-5${x.slice(13, 16)}-${(8 | (parseInt(x[16], 16) & 3)).toString(16)}${x.slice(17, 20)}-${x.slice(20, 32)}`;
+}
 function ensureUuids(db) {
-  const map = new Map(), fix = o => { if (o && !isUuid(o.id)) { const n = uuid(); map.set(o.id, n); o.id = n; } };
+  const map = new Map(), fix = o => { if (o && !isUuid(o.id)) { const n = o.id ? stableUuid(o.id) : uuid(); map.set(o.id, n); o.id = n; } };
   ['admins', 'supervisors', 'teachers', 'students', 'places', 'halaqat', 'attendance', 'records', 'news', 'pending'].forEach(k => (db[k] || []).forEach(fix));
   const P = db.payroll;
   if (P) ['employees', 'rows', 'absences'].forEach(k => (P[k] || []).forEach(fix));
@@ -224,7 +239,7 @@ async function pull() {
   lastSync = new Date(); lastError = ''; emit();
   return db;
 }
-const absFromRow = a => ({ id: a.id, y: a.y, m: a.m, date: a.date, eid: a.emp_id, name: a.name || '', place: a.place || '', perm: a.perm || '', reason: a.reason || '', proof: a.proof || '', note: a.note || '', by: a.by_name || '', byMember: a.by_member || '', ts: a.created_at });
+const absFromRow = a => ({ id: a.id, y: a.y, m: a.m, date: a.date || '', eid: a.emp_id, name: a.name || '', place: a.place || '', perm: a.perm || '', reason: a.reason || '', proof: a.proof || '', note: a.note || '', by: a.by_name || '', byMember: a.by_member || '', ts: a.created_at });
 
 /* ---------------- الإرسال: الفروق فقط ---------------- */
 const ALLOWED = {
