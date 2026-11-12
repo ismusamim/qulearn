@@ -220,6 +220,7 @@ const A = {
     const m = byId(db[d.k] || [], d.id); if (!m) return;
     ask(m.hasLogin ? `إنشاء كلمة مرور جديدة لـ «${m.name}»؟ ستتوقف القديمة عن العمل.` : `إنشاء حساب دخول لـ «${m.name}»؟`, () => cloudMakeLogins([m]));
   },
+  credsOpen: d => credsOpen(d.k),
   cloudPwAll: d => {
     const list = (db[d.k] || []).filter(m => !m.hasLogin);
     if (!list.length) { toast('كل الأعضاء لهم حسابات'); return; }
@@ -472,7 +473,7 @@ async function cloudUnlink(id) {
   try { await window.Cloud.push(db); await window.Cloud.fn({ action: 'remove', member_id: id }); } catch (e) { toast('تعذّر حذف حساب الدخول: ' + e.message); }
 }
 /* إنشاء حسابات دخول (أو كلمات جديدة) وعرض كلمات المرور مرة واحدة */
-async function cloudMakeLogins(list) {
+async function cloudMakeLogins(list, fresh = false) {
   if (!list.length) return;
   toast('جارٍ إنشاء الحسابات…');
   try {
@@ -481,19 +482,93 @@ async function cloudMakeLogins(list) {
     const items = list.map(m => {
       const old = String(m.pin || legacy[m.id] || '');
       const kind = ['teachers', 'supervisors', 'students', 'admins'].find(k => (db[k] || []).includes(m));
-      const password = PASS_RE.test(old) ? old : genPassK(kind);
+      const password = !fresh && PASS_RE.test(old) ? old : genPassK(kind);
       const twin = accounts().find(a => a.u.id !== m.id && a.u.hasLogin && norm(a.u.name) === norm(m.name));
-      return { member_id: m.id, password, share_with: twin?.u.id, name: m.name };
+      return { member_id: m.id, password, share_with: twin?.u.id, name: m.name, m };
     });
-    const res = await window.Cloud.provision(items.map(({ name, ...x }) => x), (n, t) => toast(`تم ${n} من ${t}`));
+    const res = await window.Cloud.provision(items.map(({ name, m, ...x }) => x), (n, t) => toast(`تم ${n} من ${t}`));
     const ok = new Map(res.filter(r => r.ok).map(r => [r.member_id, true]));
     list.forEach(m => { if (ok.has(m.id)) { m.hasLogin = true; delete m.pin; delete legacy[m.id]; } });
     try { localStorage.setItem('qcloud_legacy_pins', JSON.stringify(legacy)); } catch (e) { /* ignore */ }
-    const rows = items.map(it => `<tr><td>${esc(it.name)}</td><td>${ok.has(it.member_id) ? `<code class="pw">${esc(it.password)}</code>${it.share_with ? ' <small class="muted">(حساب مشترك مع نفس الاسم)</small>' : ''}` : `<span class="tag tag-no">${esc(res.find(r => r.member_id === it.member_id)?.error || 'تعذّر')}</span>`}</td></tr>`).join('');
-    openInfo(`كلمات المرور (${ok.size} من ${items.length})`, `<p class="muted">تظهر هذه الكلمات الآن فقط. اطبعها أو انسخها وسلّمها لأصحابها؛ يدخل كل عضو باسمه وكلمة مروره.</p><div class="tbl"><table><tr><th>الاسم</th><th>كلمة المرور</th></tr>${rows}</table></div><div class="row noprint"><button class="btn icon-only print-left" data-act="printCard" title="طباعة" aria-label="طباعة">${TAB_ICONS.print}</button></div>`);
+    credsResult(items, ok, res);
     Cloud.saveLocal(db);
     setTimeout(() => cloudRefresh(true), 1500);
   } catch (err) { toast('تعذّر إنشاء الحسابات: ' + (err.message || err)); }
+}
+/* ============ إرسال بيانات الدخول لأصحابها ============
+   كلمات المرور محفوظة على الخادم مشفّرة باتجاه واحد فلا يمكن عرضها لأحد؛ لذلك تُنشأ كلمة جديدة لمن يختاره المدير
+   (بعد إدخال كلمة مروره)، وتظهر مرة واحدة فقط مع رسالة جاهزة تُرسل لكل شخص على انفراد. لا تُحفظ الكلمات على الجهاز. */
+const KIND_TITLE = { teachers: 'المعلمون', students: 'الطلاب', supervisors: 'المشرفون', admins: 'المديرون' };
+/* رقم واتساب العضو: لولي الأمر في حالة الطالب الصغير، وإلا رقمه هو */
+function waNum(m) {
+  const I = m.info || {}, P = m.personal || {};
+  const n = normPhone((m.cat !== 'adult' && (I.gWhatsapp || I.gPhone)) || I.whatsapp || I.phone || P.whatsapp || P.phone || m.phone || '');
+  return /^01\d{9}$/.test(n) ? '2' + n : /^20\d{10}$/.test(n) ? n : '';
+}
+function credsOpen(kind) {
+  if (!CLOUD || session?.role !== 'admin' || !KIND_TITLE[kind]) return;
+  const list = (db[kind] || []).filter(m => m.id !== session.id);
+  if (!list.length) { toast('لا يوجد أعضاء في هذا التبويب'); return; }
+  const pre = new Set([...ui.sel].filter(id => list.some(m => m.id === id)));
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal wide"><h2>إرسال بيانات الدخول — ${KIND_TITLE[kind]}</h2>
+    <div class="note">كلمات المرور الحالية محفوظة على الخادم <b>مشفّرة</b> ولا يمكن لأحد عرضها، حتى المدير. لذلك تُنشأ <b>كلمة مرور جديدة</b> لكل من تحدده فتتوقف القديمة فورًا، وتظهر لك <b>مرة واحدة</b> مع رسالة جاهزة ترسلها لكل شخص على انفراد.</div>
+    <div class="bar" style="margin:.4rem 0"><input type="search" data-q placeholder="بحث بالاسم" style="flex:1;min-width:140px"><button type="button" class="btn sm" data-all>الكل</button><button type="button" class="btn sm" data-none>لا شيء</button><span class="muted" data-cnt></span></div>
+    <div class="prrows">${list.map(m => `<label class="chk"><input type="checkbox" data-m="${esc(m.id)}" ${pre.has(m.id) ? 'checked' : ''}> <span>${esc(m.name)} <small class="muted">${m.hasLogin ? '' : '(بلا حساب بعد) '}${waNum(m) ? '' : '— بلا رقم واتساب'}</small></span></label>`).join('')}</div>
+    <label style="margin-top:.7rem">كلمة مرورك للتأكيد<input name="pw" type="password" autocomplete="current-password"></label>
+    <div class="row"><button type="button" class="btn primary" data-go>إنشاء كلمات جديدة وإظهارها</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
+  document.body.appendChild(ov);
+  const boxes = () => [...ov.querySelectorAll('[data-m]')];
+  const count = () => { ov.querySelector('[data-cnt]').textContent = `محدد ${boxes().filter(b => b.checked).length} من ${list.length}`; };
+  count(); ov.addEventListener('change', count);
+  ov.querySelector('[data-q]').addEventListener('input', e => { const q = norm(e.target.value); boxes().forEach(b => { b.parentNode.hidden = !!q && !norm(b.parentNode.textContent).includes(q); }); });
+  ov.querySelector('[data-all]').onclick = () => { boxes().forEach(b => { if (!b.parentNode.hidden) b.checked = true; }); count(); };
+  ov.querySelector('[data-none]').onclick = () => { boxes().forEach(b => { if (!b.parentNode.hidden) b.checked = false; }); count(); };
+  ov.querySelector('[data-close]').onclick = () => ov.remove();
+  const go = ov.querySelector('[data-go]');
+  const run = async () => {
+    const sel = boxes().filter(b => b.checked).map(b => list.find(m => m.id === b.dataset.m)).filter(Boolean);
+    if (!sel.length) { toast('حدّد عضوًا واحدًا على الأقل'); return; }
+    const pw = ov.querySelector('[name=pw]').value;
+    if (!pw) { toast('اكتب كلمة مرورك للتأكيد'); return; }
+    try { await window.Cloud.testSignIn(window.Cloud.auth.email, pw); } catch (e) { toast('كلمة المرور غير صحيحة'); return; }
+    ov.remove();
+    await cloudMakeLogins(sel, true);
+  };
+  go.onclick = () => { if (!go.classList.contains('loading')) withBusy(go, run()); };
+  ov.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go.click(); } });
+}
+/* نافذة النتيجة: كلمة كل شخص ورسالته، مع واتساب ونسخ؛ تختفي الكلمات بإغلاقها */
+function credsResult(items, ok, res) {
+  const org = db.settings.org || 'إدارة الحلقات القرآنية', url = location.origin + location.pathname.replace(/index\.html$/, '');
+  const msg = it => `السلام عليكم ورحمة الله\nبيانات دخولك إلى «${org}»:\nالرابط: ${url}\nالاسم: ${it.name}\nكلمة المرور: ${it.password}\nفي صفحة الدخول اكتب اسمك ثم كلمة المرور.\nلا تشارك كلمة المرور مع أحد.`;
+  const rows = items.map((it, i) => {
+    if (!ok.has(it.member_id)) return `<tr><td>${i + 1}</td><td>${esc(it.name)}</td><td colspan="2"><span class="tag tag-no">${esc(res.find(r => r.member_id === it.member_id)?.error || 'تعذّر')}</span></td></tr>`;
+    const n = waNum(it.m || {});
+    return `<tr><td>${i + 1}</td><td>${esc(it.name)}${it.share_with ? ' <small class="muted">(حساب مشترك مع نفس الاسم)</small>' : ''}</td><td><code class="pw">${esc(it.password)}</code></td>
+      <td class="noprint"><a class="btn sm" style="text-decoration:none" data-sent="${i}" href="https://wa.me/${n}?text=${encodeURIComponent(msg(it))}" target="_blank" rel="noopener">واتساب${n ? '' : ' (اختر جهة)'}</a><button type="button" class="btn sm" data-copy="${i}">نسخ الرسالة</button> <span class="tag tag-ok" data-done="${i}" hidden>✓ أُرسلت</span></td></tr>`;
+  }).join('');
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal wide"><h2>بيانات الدخول (${ok.size} من ${items.length})</h2>
+    <div class="note noprint">تظهر هذه الكلمات <b>الآن فقط</b> ولا تُحفظ على الجهاز. أرسل لكل شخص رسالته <b>على انفراد</b> بزر «واتساب» أو «نسخ الرسالة»، ولا تنشر القائمة في مجموعة.</div>
+    <div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>كلمة المرور</th><th class="noprint">إرسال</th></tr>${rows}</table></div>
+    <div class="row noprint"><button type="button" class="btn primary" data-close>إغلاق</button><span class="muted" data-left style="align-self:center"></span><button class="btn icon-only print-left" data-act="printCard" title="طباعة" aria-label="طباعة">${TAB_ICONS.print}</button></div></div>`;
+  document.body.appendChild(ov);
+  const sent = new Set(), total = items.filter(it => ok.has(it.member_id)).length;
+  const done = i => { sent.add(i); const t = ov.querySelector(`[data-done="${i}"]`); if (t) t.hidden = false; };
+  ov.addEventListener('click', e => {
+    const a = e.target.closest('[data-sent]'); if (a) { done(+a.dataset.sent); return; }
+    const c = e.target.closest('[data-copy]'); if (!c) return;
+    const i = +c.dataset.copy, text = msg(items[i]);
+    const fallback = () => { const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); } catch (err) { /* ignore */ } t.remove(); };
+    (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject()).catch(fallback).finally(() => { done(i); toast('نُسخت رسالة «' + items[i].name + '»'); });
+  });
+  let warned = false;
+  ov.querySelector('[data-close]').onclick = () => {
+    const left = total - sent.size;
+    if (left > 0 && !warned) { warned = true; ov.querySelector('[data-left]').textContent = `لم تُرسل لـ ${left} بعد — الإغلاق يُخفي الكلمات نهائيًا. اضغط «إغلاق» مرة أخرى للتأكيد.`; return; }
+    ov.remove();
+  };
 }
 function cloudCard() {
   const C = window.Cloud, n = C.pendingCount(db), off = navigator.onLine === false;
@@ -831,6 +906,10 @@ function tidyUi() {
   document.querySelectorAll('[data-act=payPrint]:not(.icon-only),[data-act=printCard]:not(.icon-only)').forEach(b => {
     const t = b.textContent.trim() || 'طباعة'; b.classList.add('icon-only', 'print-left'); b.title = t; b.setAttribute('aria-label', t); b.innerHTML = TAB_ICONS.print;
   });
+  /* زر «إرسال بيانات الدخول» في شريط تبويبات الأعضاء */
+  const dupB = CLOUD && session?.role === 'admin' && !document.querySelector('main [data-act=credsOpen]') && document.querySelector('main .bar [data-act=dupOpen]');
+  const kindB = dupB && dupB.closest('.bar')?.querySelector('[data-act=msub].on')?.dataset.v;
+  if (kindB && KIND_TITLE[kindB]) dupB.insertAdjacentHTML('beforebegin', `<button class="btn" data-act="credsOpen" data-k="${kindB}">إرسال بيانات الدخول</button>`);
   const pin = document.querySelector('#login input[name=pin][inputmode]');
   if (pin) { pin.removeAttribute('inputmode'); pin.setAttribute('autocapitalize', 'off'); pin.setAttribute('spellcheck', 'false'); pin.dir = 'ltr'; }
 }
