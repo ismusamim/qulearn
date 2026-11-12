@@ -1,5 +1,10 @@
 'use strict';
 /* الجزء الثالث: الإجراءات، وأحداث الصفحة، وقاعدة البيانات، والتشغيل */
+/* كلمة المرور 10 خانات: بادئة بحسب النوع + 6 أرقام (tech للمعلم، mang للمدير، stud للطالب، supe للمشرف) */
+const PASS_PREFIX = { teacher: 'tech', teachers: 'tech', admin: 'mang', admins: 'mang', student: 'stud', students: 'stud', supervisor: 'supe', supervisors: 'supe' };
+const PASS_RE = /^(tech|mang|stud|supe)\d{6}$/;
+const genPassK = kind => (PASS_PREFIX[kind] || 'user') + genPass();
+TAB_ICONS.print = svg('<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>');
 /* ============ الإجراءات ============ */
 const A = {
   lmode: d => { if (!ui.pick) return; ui.pick.sel = +d.i; renderPick(); document.querySelector('#login input[name=pin]')?.focus(); },
@@ -57,7 +62,7 @@ const A = {
   },
   newPw: d => {
     const m = byId(db[d.k], d.id);
-    ask('إنشاء كلمة مرور جديدة لـ «' + m.name + '»؟ ستتوقف القديمة عن العمل.', () => { m.pin = genPass(); ui.shown[m.id] = true; save(); render(); });
+    ask('إنشاء كلمة مرور جديدة لـ «' + m.name + '»؟ ستتوقف القديمة عن العمل.', () => { m.pin = genPassK(d.k); ui.shown[m.id] = true; save(); render(); });
   },
   editName: d => {
     const m = byId(db[d.k], d.id);
@@ -66,7 +71,7 @@ const A = {
   addMember: d => {
     const k = d.k, one = KIND_ONE[k];
     openForm('إضافة ' + one, [{ name: 'name', label: 'الاسم', required: true }, { type: 'note', label: 'ستُنشأ كلمة المرور تلقائيًا.' }], v => {
-      const id = uid(), pin = genPass();
+      const id = uid(), pin = genPassK(k);
       const name = v.name.trim();
       if (db[k].some(m => norm(m.name) === norm(name))) return `يوجد ${one} بالاسم نفسه`;
       db[k].push(k === 'students' ? { id, name, halaqaId: '', phone: '', pin } : k === 'admins' ? { id, name, pin } : { id, name, phone: '', pin });
@@ -76,7 +81,7 @@ const A = {
     });
   },
 
-  addTeacher: () => openForm('معلم جديد', [{ name: 'name', label: 'الاسم', required: true }, { name: 'phone', label: 'الجوال', type: 'tel' }, ...pinField(genPass())],
+  addTeacher: () => openForm('معلم جديد', [{ name: 'name', label: 'الاسم', required: true }, { name: 'phone', label: 'الجوال', type: 'tel' }, ...pinField(genPassK('teachers'))],
     v => { db.teachers.push({ id: uid(), name: v.name.trim(), phone: v.phone, pin: v.pin }); }),
   editTeacher: d => { const t = byId(db.teachers, d.id); openForm('تعديل معلم', [{ name: 'name', label: 'الاسم', value: t.name, required: true }, { name: 'phone', label: 'الجوال', value: t.phone, type: 'tel' }, ...pinField(t.pin)],
     v => { Object.assign(t, { name: v.name.trim(), phone: v.phone, pin: v.pin }); }); },
@@ -426,7 +431,8 @@ async function cloudMakeLogins(list) {
     let legacy = {}; try { legacy = JSON.parse(localStorage.getItem('qcloud_legacy_pins') || '{}'); } catch (e) { /* ignore */ }
     const items = list.map(m => {
       const old = String(m.pin || legacy[m.id] || '');
-      const password = /^\d{6,}$/.test(old) ? old : genPass();
+      const kind = ['teachers', 'supervisors', 'students', 'admins'].find(k => (db[k] || []).includes(m));
+      const password = PASS_RE.test(old) ? old : genPassK(kind);
       const twin = accounts().find(a => a.u.id !== m.id && a.u.hasLogin && norm(a.u.name) === norm(m.name));
       return { member_id: m.id, password, share_with: twin?.u.id, name: m.name };
     });
@@ -435,7 +441,7 @@ async function cloudMakeLogins(list) {
     list.forEach(m => { if (ok.has(m.id)) { m.hasLogin = true; delete m.pin; delete legacy[m.id]; } });
     try { localStorage.setItem('qcloud_legacy_pins', JSON.stringify(legacy)); } catch (e) { /* ignore */ }
     const rows = items.map(it => `<tr><td>${esc(it.name)}</td><td>${ok.has(it.member_id) ? `<code class="pw">${esc(it.password)}</code>${it.share_with ? ' <small class="muted">(حساب مشترك مع نفس الاسم)</small>' : ''}` : `<span class="tag tag-no">${esc(res.find(r => r.member_id === it.member_id)?.error || 'تعذّر')}</span>`}</td></tr>`).join('');
-    openInfo(`كلمات المرور (${ok.size} من ${items.length})`, `<p class="muted">تظهر هذه الكلمات الآن فقط. اطبعها أو انسخها وسلّمها لأصحابها؛ يدخل كل عضو باسمه وكلمة مروره.</p><div class="tbl"><table><tr><th>الاسم</th><th>كلمة المرور</th></tr>${rows}</table></div><div class="row noprint"><button class="btn" data-act="printCard">طباعة</button></div>`);
+    openInfo(`كلمات المرور (${ok.size} من ${items.length})`, `<p class="muted">تظهر هذه الكلمات الآن فقط. اطبعها أو انسخها وسلّمها لأصحابها؛ يدخل كل عضو باسمه وكلمة مروره.</p><div class="tbl"><table><tr><th>الاسم</th><th>كلمة المرور</th></tr>${rows}</table></div><div class="row noprint"><button class="btn icon-only print-left" data-act="printCard" title="طباعة" aria-label="طباعة">${TAB_ICONS.print}</button></div>`);
     Cloud.saveLocal(db);
     setTimeout(() => cloudRefresh(true), 1500);
   } catch (err) { toast('تعذّر إنشاء الحسابات: ' + (err.message || err)); }
@@ -519,9 +525,12 @@ const clsRead = () => db.payroll?.settings?.cls || {};
 const clsMap = () => { db.payroll.settings = db.payroll.settings || {}; return (db.payroll.settings.cls = db.payroll.settings.cls || {}); };
 /* التصنيف الفعّال: إن حُذف العضو المرتبط يعود الموظف «غير مصنف» */
 function clsOf(e) {
-  const c = clsRead()[e.id]; if (!c || !c.kind) return null;
-  if (CLS_ROLES[c.kind]) return byId(db[COLL[c.kind]] || [], c.memberId) ? c : null;
-  return c;
+  const c = clsRead()[e.id];
+  if (c?.kind && !CLS_ROLES[c.kind]) return c;
+  if (c?.kind && byId(db[COLL[c.kind]] || [], c.memberId)) return c;
+  /* بلا تصنيف محفوظ: إن طابق اسمه عضوًا واحدًا (معلم أو مشرف أو مدير) يُعدّ مصنَّفًا به */
+  const hits = Object.keys(CLS_ROLES).flatMap(r => (db[COLL[r]] || []).filter(m => norm(m.name) === norm(e.name)).map(m => ({ kind: r, memberId: m.id, auto: true })));
+  return hits.length === 1 ? hits[0] : null;
 }
 const unclassCount = () => payEmps().filter(e => !clsOf(e)).length;
 function clsSuggest(e) {
@@ -565,7 +574,7 @@ function classifyEmp(id, val, quiet) {
     const coll = COLL[val];
     let m = db[coll].find(x => norm(x.name) === norm(e.name));
     const isNew = !m;
-    if (!m) { m = val === 'admin' ? { id: uid(), name: e.name, pin: genPass() } : { id: uid(), name: e.name, phone: '', pin: genPass() }; db[coll].push(m); ui.shown[m.id] = true; }
+    if (!m) { m = val === 'admin' ? { id: uid(), name: e.name, pin: genPassK('admin') } : { id: uid(), name: e.name, phone: '', pin: genPassK(val) }; db[coll].push(m); ui.shown[m.id] = true; }
     clsMap()[id] = { kind: val, memberId: m.id };
     if (!quiet) { save(); render(); toast(`«${e.name}» ${isNew ? 'أُضيف' : 'رُبط'} ${CLS_ROLES[val]}${CLOUD && !m.hasLogin ? ' — أنشئ له حساب الدخول من تبويب «' + { teacher: 'المعلمون', supervisor: 'المشرفون', admin: 'المديرون' }[val] + '»' : ''}`); }
     return isNew;
@@ -607,8 +616,12 @@ function dupGroups() {
       const sameHal = b => k !== 'students' || !a.halaqaId || !b.halaqaId || a.halaqaId === b.halaqaId;
       /* موظفان صُرف لكل منهما مرتب في الشهر نفسه شخصان مختلفان */
       const pm = id => new Set((db.payroll?.rows || []).filter(r => r.eid === id).map(r => r.y * 100 + r.m));
-      const noOverlap = b => { if (k !== 'payroll') return true; const x = pm(a.id); return ![...pm(b.id)].some(v => x.has(v)); };
-      const g = [a, ...list.slice(i + 1).filter(b => !seen.has(b.id) && sameHal(b) && noOverlap(b) && dupLike(a.name, b.name))];
+      /* إلا الاسم المطابق تمامًا: نسخة مكررة من الشخص نفسه (استيراد تكرر)، فيُقترح دائمًا */
+      const same = b => norm(a.name).replace(/\s/g, '') === norm(b.name).replace(/\s/g, '');
+      const noOverlap = b => { if (k !== 'payroll' || same(b)) return true; const x = pm(a.id); return ![...pm(b.id)].some(v => x.has(v)); };
+      let g = [a, ...list.slice(i + 1).filter(b => !seen.has(b.id) && sameHal(b) && noOverlap(b) && dupLike(a.name, b.name))];
+      /* الاختيار الافتراضي للباقي: المصنَّف ثم صاحب أكثر الشهور */
+      if (k === 'payroll') g = g.slice().sort((x, y) => (clsOf(y) ? 1 : 0) - (clsOf(x) ? 1 : 0) || P_rows(y.id) - P_rows(x.id));
       if (g.length < 2) return;
       g.forEach(m => seen.add(m.id));
       const key = k + ':' + g.map(m => m.id).sort().join(',');
@@ -623,8 +636,12 @@ function dupMerge(k, keep, drop) {
   if (k === 'payroll') {
     const P = db.payroll;
     /* غياب المحذوف في يوم مسجّل فيه للباقي يُترك (لا يتكرر اليوم نفسه) */
-    const kd = new Set(P.absences.filter(a => a.eid === keep.id && a.date).map(a => a.date));
-    P.absences = P.absences.filter(a => !(a.eid === drop.id && a.date && kd.has(a.date)));
+    const ak = a => a.date || [a.y, a.m, a.perm, a.reason, a.note].join('|');
+    const kd = new Set(P.absences.filter(a => a.eid === keep.id).map(ak));
+    P.absences = P.absences.filter(a => !(a.eid === drop.id && kd.has(ak(a))));
+    /* صف المحذوف في شهر له فيه صف للباقي نسخة مكررة فيُحذف، والباقي يُنقل */
+    const km = new Set(P.rows.filter(r => r.eid === keep.id).map(r => r.y * 100 + r.m));
+    P.rows = P.rows.filter(r => !(r.eid === drop.id && km.has(r.y * 100 + r.m)));
     P.rows.forEach(r => re(r, 'eid')); P.absences.forEach(a => re(a, 'eid'));
     ['role', 'sys', 'basic', 'rate', 'incentive', 'transport', 'hours', 'place', 'code'].forEach(f => { if ((keep[f] == null || keep[f] === '') && drop[f] != null && drop[f] !== '') keep[f] = drop[f]; });
     if (drop.status === 'نشط') keep.status = 'نشط';
@@ -760,7 +777,37 @@ function eyeify() {
     b.setAttribute('aria-label', 'إظهار كلمة المرور'); b.innerHTML = EYE; w.appendChild(b);
   });
 }
-new MutationObserver(() => { eyeify(); addPrintButtons(); }).observe(document.body, { childList: true, subtree: true });
+/* أزرار الطباعة أيقونة على اليسار، وحقل كلمة مرور الدخول يقبل الحروف (tech… / stud…) */
+function tidyUi() {
+  document.querySelectorAll('[data-act=payPrint]:not(.icon-only),[data-act=printCard]:not(.icon-only)').forEach(b => {
+    const t = b.textContent.trim() || 'طباعة'; b.classList.add('icon-only', 'print-left'); b.title = t; b.setAttribute('aria-label', t); b.innerHTML = TAB_ICONS.print;
+  });
+  const pin = document.querySelector('#login input[name=pin][inputmode]');
+  if (pin) { pin.removeAttribute('inputmode'); pin.setAttribute('autocapitalize', 'off'); pin.setAttribute('spellcheck', 'false'); pin.dir = 'ltr'; }
+}
+new MutationObserver(() => { eyeify(); addPrintButtons(); tidyUi(); freezeSoon(); }).observe(document.body, { childList: true, subtree: true });
+/* تثبيت رأس الجدول وأعمدة المسلسل والاسم أثناء التمرير */
+let frzRaf = 0;
+const freezeSoon = () => { cancelAnimationFrame(frzRaf); frzRaf = requestAnimationFrame(freezeTables); };
+window.addEventListener('resize', freezeSoon);
+const LEAD = new Set(['', '#', 'م', 'الكود', 'مسلسل']);
+function freezeTables() {
+  document.querySelectorAll('main .tbl table').forEach(tbl => {
+    const { rows, grid, H } = tableGrid(tbl);
+    if (!H || H >= rows.length) return;
+    tbl.classList.add('frz');
+    /* الأعمدة الثابتة: المسلسل/التحديد في البداية ثم عمود الاسم */
+    let n = 0; while (n < 3 && grid[0][n] && LEAD.has(grid[0][n].td.textContent.trim())) n++;
+    n = Math.min(n + 1, (grid[H] || []).length - 1);
+    const off = [0]; for (let c = 0; c < n; c++) off.push(off[c] + (grid[H][c]?.cs === 1 ? grid[H][c].td.offsetWidth : 0));
+    let top = 0;
+    rows.forEach((tr, ri) => {
+      [...tr.cells].forEach(td => { td.classList.remove('stk-h', 'stk-hl', 'stk-c'); td.style.top = td.style.right = ''; });
+      if (ri < H) { [...tr.cells].forEach(td => { td.classList.add('stk-h'); td.style.top = top + 'px'; if (ri + (td.rowSpan || 1) >= H) td.classList.add('stk-hl'); }); top += tr.offsetHeight; }
+    });
+    grid.forEach(r => r.forEach(x => { if (x?.first && x.c0 + x.cs <= n) { x.td.classList.add('stk-c'); x.td.style.right = off[x.c0] + 'px'; } }));
+  });
+}
 document.addEventListener('click', e => {
   const b = e.target.closest('.eye'); if (!b) return;
   e.preventDefault();
@@ -776,7 +823,7 @@ function addPrintButtons() {
     t.dataset.pr = '1';
     if (t.classList.contains('paytbl') || !t.querySelector('table td')) return;
     const b = document.createElement('div'); b.className = 'tblprint noprint';
-    b.innerHTML = `<button type="button" class="btn sm" data-print title="طباعة / حفظ PDF">${svg('<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>')}<span>طباعة / PDF</span></button>`;
+    b.innerHTML = `<button type="button" class="btn sm" data-print title="طباعة / حفظ PDF" aria-label="طباعة / حفظ PDF">${TAB_ICONS.print}</button>`;
     t.parentNode.insertBefore(b, t);
   });
 }
@@ -939,7 +986,7 @@ async function cloudTest() {
   const show = () => openInfo('اختبار الاتصال', `<div class="tbl"><table>${steps.map(([t, ok, m]) => `<tr><td>${ok === null ? '…' : ok ? '✅' : '❌'}</td><td>${esc(t)}</td><td class="muted">${esc(m || '')}</td></tr>`).join('')}</table></div>`);
   const step = async (t, f) => { steps.push([t, null, '']); const i = steps.length - 1; try { const m = await f(); steps[i] = [t, true, m || '']; return true; } catch (e) { steps[i] = [t, false, e.message || String(e)]; return false; } };
   document.querySelectorAll('.overlay').forEach(o => o.remove());
-  const id = C.uuid(), pw = genPass() + 'q';
+  const id = C.uuid(), pw = genPassK('students');
   let ok = await step('الاتصال بقاعدة البيانات وصلاحية الإداري', async () => { if (!(await C.rpc('is_admin'))) throw new Error('هذا الحساب ليس إداريًا على الخادم'); });
   ok = ok && await step('إنشاء عضو تجريبي', () => C.req('/rest/v1/members', { method: 'POST', body: { id, role: 'student', name: 'اختبار الاتصال ' + Date.now() }, headers: { Prefer: 'return=minimal' } }));
   let email = '';
