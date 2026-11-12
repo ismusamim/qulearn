@@ -1,0 +1,336 @@
+/* ============ المزامنة مع قاعدة البيانات (Supabase) ============
+   - التطبيق يعمل على نسخة محلية من البيانات (db) كما كان، فيعمل بدون إنترنت.
+   - كل حفظ يقارن البيانات بآخر نسخة مؤكدة من الخادم ويرسل الفروق فقط.
+   - التغييرات التي تحدث بدون إنترنت تبقى محفوظة وتُرسل عند عودة الاتصال.
+   - الصلاحيات الحقيقية مطبّقة على الخادم (RLS)، لا في المتصفح. */
+(() => {
+'use strict';
+const DEF = {
+  url: 'https://vjmlrajxcfxiooprzfjw.supabase.co',
+  key: 'sb_publishable_IM-942KoPf_iH_FvPBnBag_hxJQCKrJ',
+  fn: 'dynamic-worker'
+};
+let CFG = DEF;
+try { const o = JSON.parse(localStorage.getItem('qcloud_cfg') || 'null'); if (o && o.url && o.key) CFG = { ...DEF, ...o }; } catch (e) { /* ignore */ }
+if (/[?&]local=1/.test(location.search)) CFG = { ...CFG, url: '' };
+
+const LS = {
+  get: k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+  del: k => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }
+};
+const AKEY = 'qcloud_auth';
+let auth = LS.get(AKEY);              // { access_token, refresh_token, expires_at, uid, email, member:{role,id} }
+let snap = null, pushing = false, again = false, timer = null, lastError = '', lastSync = null;
+const listeners = new Set();
+const emit = () => listeners.forEach(f => { try { f(); } catch (e) { /* ignore */ } });
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = v => typeof v === 'string' && UUID_RE.test(v);
+const uuid = () => {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
+
+/* ---------------- الطلبات ---------------- */
+class HttpError extends Error { constructor(status, msg, body) { super(msg); this.status = status; this.body = body; } }
+async function token() {
+  if (!auth) return null;
+  if (auth.expires_at && Date.now() / 1000 > auth.expires_at - 60) await refresh();
+  return auth?.access_token || null;
+}
+async function refresh() {
+  const r = await fetch(`${CFG.url}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST', headers: { apikey: CFG.key, 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: auth.refresh_token })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { if (r.status === 400 || r.status === 401) { auth = null; LS.del(AKEY); emit(); } throw new HttpError(r.status, j.error_description || j.msg || 'انتهت الجلسة'); }
+  storeAuth(j);
+}
+function storeAuth(j) {
+  auth = { ...(auth || {}), access_token: j.access_token, refresh_token: j.refresh_token, expires_at: j.expires_at || Math.floor(Date.now() / 1000) + (j.expires_in || 3600), uid: j.user?.id || auth?.uid, email: j.user?.email || auth?.email };
+  LS.set(AKEY, auth);
+}
+async function req(path, { method = 'GET', body, headers = {}, anon = false, retry = true } = {}) {
+  const h = { apikey: CFG.key, ...headers };
+  if (body !== undefined) h['Content-Type'] = 'application/json';
+  if (!anon) { const t = await token(); if (t) h.Authorization = 'Bearer ' + t; }
+  const r = await fetch(CFG.url + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (r.status === 401 && !anon && retry && auth) { await refresh(); return req(path, { method, body, headers, anon, retry: false }); }
+  const txt = await r.text();
+  let j = null; try { j = txt ? JSON.parse(txt) : null; } catch (e) { j = txt; }
+  if (!r.ok) throw new HttpError(r.status, (j && (j.message || j.error_description || j.error || j.msg)) || `HTTP ${r.status}`, j);
+  return j;
+}
+const rpc = (fn, args = {}, anon = false) => req(`/rest/v1/rpc/${fn}`, { method: 'POST', body: args, anon });
+async function selectAll(table, order = 'id', extra = '') {
+  const out = [];
+  for (let off = 0; ; off += 1000) {
+    const page = await req(`/rest/v1/${table}?select=*&order=${order}&limit=1000&offset=${off}${extra}`);
+    out.push(...(page || []));
+    if (!page || page.length < 1000) break;
+  }
+  return out;
+}
+
+/* ---------------- الدخول ---------------- */
+async function signIn(email, password) {
+  const r = await fetch(`${CFG.url}/auth/v1/token?grant_type=password`, {
+    method: 'POST', headers: { apikey: CFG.key, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new HttpError(r.status, /invalid/i.test(j.error_description || j.msg || '') ? 'كلمة المرور غير صحيحة' : (j.error_description || j.msg || 'تعذّر الدخول'));
+  auth = null; storeAuth(j);
+  snap = LS.get(snapKey());
+  emit();
+  return auth;
+}
+async function signOut() {
+  try { if (auth) await req('/auth/v1/logout', { method: 'POST', retry: false }); } catch (e) { /* ignore */ }
+  auth = null; snap = null; LS.del(AKEY); emit();
+}
+const lookup = q => rpc('login_lookup', { q }, true);
+const setMember = m => { if (auth) { auth.member = m; LS.set(AKEY, auth); } };
+
+/* ---------------- الوظيفة السحابية لإدارة الحسابات ---------------- */
+async function fn(body) {
+  const t = await token();
+  const r = await fetch(`${CFG.url}/functions/v1/${CFG.fn}`, {
+    method: 'POST', headers: { apikey: CFG.key, Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new HttpError(r.status, j.error || j.message || `HTTP ${r.status}`, j);
+  return j;
+}
+async function provision(items, onProgress) {
+  const res = [];
+  for (let i = 0; i < items.length; i += 40) {
+    const part = await fn({ action: 'provision', items: items.slice(i, i + 40) });
+    res.push(...(part.results || []));
+    onProgress?.(Math.min(i + 40, items.length), items.length);
+  }
+  return res;
+}
+
+/* ---------------- التحويل بين بيانات التطبيق وجداول الخادم ---------------- */
+const nz = v => (v === '' || v === undefined ? null : v);
+const num = v => (v === '' || v === undefined || v === null || isNaN(+v) ? null : +v);
+const ROLE_COLL = { admin: 'admins', supervisor: 'supervisors', teacher: 'teachers', student: 'students' };
+
+function memberRow(m, role) {
+  return {
+    id: m.id, role, name: m.name || '', phone: m.phone || '',
+    halaqa_id: role === 'student' ? nz(m.halaqaId) : null,
+    cat: role === 'student' ? (m.cat === 'adult' ? 'adult' : 'child') : null,
+    info: role === 'teacher' ? { personal: m.personal || {}, tech: m.tech || {} } : (m.info || {}),
+    extra: m.extra || {}, photo: m.photo || null
+  };
+}
+/* كل مجموعة: [اسم المجموعة، الجدول، المفتاح، الصفوف] بترتيب يحترم العلاقات بين الجداول */
+function groups(db) {
+  const P = db.payroll || {};
+  const g = [];
+  const add = (name, table, pk, rows, conflict) => g.push({ name, table, pk, rows, conflict });
+  add('settings', 'settings', ['key'], ['org', 'theme', 'logo'].filter(k => db.settings?.[k] !== undefined).map(k => ({ key: k, value: db.settings[k] ?? null })));
+  add('places', 'places', ['id'], (db.places || []).map(p => ({ id: p.id, name: p.name, type: p.type || 'مسجد', address: p.address || '' })));
+  add('staff', 'members', ['id'], ['admin', 'supervisor', 'teacher'].flatMap(r => (db[ROLE_COLL[r]] || []).map(m => memberRow(m, r))));
+  add('halaqat', 'halaqat', ['id'], (db.halaqat || []).map(h => ({ id: h.id, name: h.name || '', teacher_id: nz(h.teacherId), supervisor_id: nz(h.supervisorId), place_id: nz(h.placeId), time: h.time || null })));
+  add('students', 'members', ['id'], (db.students || []).map(m => memberRow(m, 'student')));
+  add('member_admin', 'member_admin', ['member_id'], (db.teachers || []).filter(t => t.admin && Object.keys(t.admin).length).map(t => ({ member_id: t.id, data: t.admin })));
+  add('attendance', 'attendance', ['id'], (db.attendance || []).map(a => ({ id: a.id, student_id: a.studentId, date: a.date, status: a.status })), 'student_id,date');
+  add('records', 'records', ['id'], (db.records || []).map(r => ({ id: r.id, student_id: r.studentId, date: r.date, type: r.type, surah: +r.surah, from_ayah: +r.from, to_ayah: +r.to, grade: r.grade || null, note: r.note || '' })));
+  add('news', 'news', ['id'], (db.news || []).map(n => ({ id: n.id, text: n.text, audience: n.audience || 'all', date: n.date })));
+  add('custom_fields', 'custom_fields', ['kind', 'key'], ['students', 'teachers'].flatMap(k => (db.fields?.[k] || []).map(f => ({ kind: k, key: f.key, label: f.label, type: f.type || 'text' }))));
+  add('pending', 'pending_columns', ['id'], (db.pending || []).map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date })));
+  if (db.payroll) {
+    add('pay_settings', 'pay_settings', ['id'], [{ id: 1, data: P.settings || {} }]);
+    add('pay_employees', 'pay_employees', ['id'], (P.employees || []).map(e => ({ id: e.id, code: nz(e.code), name: e.name, role: nz(e.role), sys: nz(e.sys), status: e.status === 'متوقف' ? 'متوقف' : 'نشط', basic: num(e.basic), rate: num(e.rate), incentive: num(e.incentive), transport: num(e.transport), hours: num(e.hours), place: nz(e.place), note: nz(e.note) })));
+    add('pay_rows', 'pay_rows', ['id'], (P.rows || []).map(r => ({ id: r.id, y: +r.y, m: +r.m, emp_id: r.eid, name: nz(r.name), role: nz(r.role), base: num(r.base), extra: num(r.extra), exc: num(r.exc), abs_p: num(r.absP), abs_n: num(r.absN), mtg_p: num(r.mtgP), mtg_n: num(r.mtgN), d_test: num(r.dTest), d_rec: num(r.dRec), d_books: num(r.dBooks), basic: num(r.basic), rate: num(r.rate), incentive: num(r.incentive), transport: num(r.transport), note: r.note || '' })));
+    add('pay_closed', 'pay_closed', ['y', 'm'], (P.closed || []).map(k => { const [y, m] = String(k).split('-').map(Number); return { y, m }; }).filter(x => x.y && x.m));
+    add('absences', 'absences', ['id'], (P.absences || []).map(a => ({ id: a.id, y: +a.y, m: +a.m, date: a.date, emp_id: a.eid, name: nz(a.name), place: nz(a.place), perm: a.perm || '', reason: nz(a.reason), proof: a.proof || '', note: nz(a.note), by_member: isUuid(a.byMember) ? a.byMember : null, by_name: nz(a.by) })));
+  }
+  return g;
+}
+const rowKey = (pk, r) => pk.map(k => r[k]).join('|');
+function snapshotOf(db) {
+  const s = {};
+  for (const gr of groups(db)) { const m = {}; gr.rows.forEach(r => { m[rowKey(gr.pk, r)] = JSON.stringify(r); }); s[gr.name] = m; }
+  return s;
+}
+
+/* المعرّفات القديمة (غير UUID) تُستبدل بمعرّفات جديدة مع تحديث كل الإشارات إليها */
+function ensureUuids(db) {
+  const map = new Map(), fix = o => { if (o && !isUuid(o.id)) { const n = uuid(); map.set(o.id, n); o.id = n; } };
+  ['admins', 'supervisors', 'teachers', 'students', 'places', 'halaqat', 'attendance', 'records', 'news', 'pending'].forEach(k => (db[k] || []).forEach(fix));
+  const P = db.payroll;
+  if (P) ['employees', 'rows', 'absences'].forEach(k => (P[k] || []).forEach(fix));
+  if (!map.size) return false;
+  const re = v => (map.has(v) ? map.get(v) : v);
+  (db.halaqat || []).forEach(h => { h.teacherId = re(h.teacherId); h.supervisorId = re(h.supervisorId); h.placeId = re(h.placeId); });
+  (db.students || []).forEach(s => { s.halaqaId = re(s.halaqaId); });
+  (db.attendance || []).forEach(a => { a.studentId = re(a.studentId); });
+  (db.records || []).forEach(r => { r.studentId = re(r.studentId); });
+  (db.pending || []).forEach(p => (p.values || []).forEach(v => { v.mid = re(v.mid); }));
+  if (P) { (P.rows || []).forEach(r => { r.eid = re(r.eid); }); (P.absences || []).forEach(a => { a.eid = re(a.eid); a.byMember = re(a.byMember); }); }
+  return map;
+}
+
+/* ---------------- السحب من الخادم ---------------- */
+function emptyDb() {
+  return { settings: { org: 'إدارة الحلقات القرآنية' }, admins: [], supervisors: [], teachers: [], students: [], places: [], halaqat: [], attendance: [], records: [], news: [], fields: { students: [], teachers: [] }, pending: [] };
+}
+async function pull() {
+  const role = auth?.member?.role;
+  const [settings, places, members, madm, halaqat, attendance, records, news, fields] = await Promise.all([
+    selectAll('settings', 'key'), selectAll('places'), selectAll('members'), selectAll('member_admin', 'member_id'), selectAll('halaqat'),
+    selectAll('attendance'), selectAll('records'), selectAll('news'), selectAll('custom_fields', 'kind,key')
+  ]);
+  const db = emptyDb();
+  settings.forEach(s => { db.settings[s.key] = s.value; });
+  db.places = places.map(p => ({ id: p.id, name: p.name, type: p.type, address: p.address || '' }));
+  const adm = new Map(madm.map(a => [a.member_id, a.data]));
+  members.forEach(m => {
+    const base = { id: m.id, name: m.name, phone: m.phone || '', userId: m.user_id || null, hasLogin: !!m.login_email, extra: m.extra || {} };
+    if (m.role === 'teacher') db.teachers.push({ ...base, personal: m.info?.personal || {}, tech: m.info?.tech || {}, admin: adm.get(m.id) || {} });
+    else if (m.role === 'student') db.students.push({ ...base, halaqaId: m.halaqa_id || '', cat: m.cat || 'child', info: m.info || {}, photo: m.photo || undefined });
+    else db[ROLE_COLL[m.role]].push(base);
+  });
+  db.halaqat = halaqat.map(h => ({ id: h.id, name: h.name || '', teacherId: h.teacher_id || '', supervisorId: h.supervisor_id || '', placeId: h.place_id || '', time: h.time || undefined }));
+  db.attendance = attendance.map(a => ({ id: a.id, studentId: a.student_id, date: a.date, status: a.status }));
+  db.records = records.map(r => ({ id: r.id, studentId: r.student_id, date: r.date, type: r.type, surah: r.surah, from: r.from_ayah, to: r.to_ayah, grade: r.grade || '', note: r.note || '' }));
+  db.news = news.map(n => ({ id: n.id, text: n.text, audience: n.audience, date: n.date }));
+  fields.forEach(f => { (db.fields[f.kind] = db.fields[f.kind] || []).push({ key: f.key, label: f.label, type: f.type }); });
+  if (role === 'admin') {
+    const [ps, emps, rows, closed, abs, pend] = await Promise.all([
+      selectAll('pay_settings'), selectAll('pay_employees'), selectAll('pay_rows'), selectAll('pay_closed', 'y,m'), selectAll('absences'), selectAll('pending_columns')
+    ]);
+    db.pending = pend.map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date }));
+    db.payroll = {
+      settings: ps[0]?.data || {},
+      employees: emps.map(e => ({ id: e.id, code: e.code || '', name: e.name, role: e.role || '', sys: e.sys || '', status: e.status, basic: e.basic, rate: e.rate, incentive: e.incentive, transport: e.transport, hours: e.hours, place: e.place || '', note: e.note || '' })),
+      rows: rows.map(r => ({ id: r.id, y: r.y, m: r.m, eid: r.emp_id, name: r.name || '', role: r.role || '', base: r.base, extra: r.extra, exc: r.exc, absP: r.abs_p, absN: r.abs_n, mtgP: r.mtg_p, mtgN: r.mtg_n, dTest: r.d_test, dRec: r.d_rec, dBooks: r.d_books, basic: r.basic, rate: r.rate, incentive: r.incentive, transport: r.transport, note: r.note || '' })),
+      closed: closed.map(c => c.y + '-' + c.m),
+      absences: abs.map(absFromRow)
+    };
+  } else if (role === 'supervisor') {
+    const [abs, staff, cur] = await Promise.all([selectAll('absences'), rpc('staff_list'), rpc('current_pay_month').catch(() => null)]);
+    const c = Array.isArray(cur) ? cur[0] : cur;
+    db.payroll = { settings: {}, employees: (staff || []).map(e => ({ id: e.id, code: e.code || '', name: e.name, place: e.place || '', status: e.status })), rows: [], closed: [], absences: abs.map(absFromRow), curMonth: c && c.y ? { y: c.y, m: c.m } : null, readOnly: true };
+  }
+  snap = snapshotOf(db);
+  saveLocal(db);
+  lastSync = new Date(); lastError = ''; emit();
+  return db;
+}
+const absFromRow = a => ({ id: a.id, y: a.y, m: a.m, date: a.date, eid: a.emp_id, name: a.name || '', place: a.place || '', perm: a.perm || '', reason: a.reason || '', proof: a.proof || '', note: a.note || '', by: a.by_name || '', byMember: a.by_member || '', ts: a.created_at });
+
+/* ---------------- الإرسال: الفروق فقط ---------------- */
+const ALLOWED = {
+  admin: null, // الكل
+  teacher: ['attendance', 'records'],
+  supervisor: ['attendance', 'records', 'absences'],
+  student: []
+};
+function diff(db) {
+  const role = auth?.member?.role, allow = ALLOWED[role];
+  const out = [];
+  for (const gr of groups(db)) {
+    if (allow && !allow.includes(gr.name)) continue;
+    const prev = snap?.[gr.name] || {}, cur = {};
+    const up = [];
+    gr.rows.forEach(r => { const k = rowKey(gr.pk, r), j = JSON.stringify(r); cur[k] = j; if (prev[k] !== j) up.push(r); });
+    const del = Object.keys(prev).filter(k => !(k in cur));
+    if (up.length || del.length) out.push({ ...gr, up, del, cur });
+  }
+  return out;
+}
+const pendingCount = db => (auth && snap && db ? diff(db).reduce((a, g) => a + g.up.length + g.del.length, 0) : 0);
+function enc(v) { return '"' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
+async function doDelete(gr, keys) {
+  for (let i = 0; i < keys.length; i += 100) {
+    const part = keys.slice(i, i + 100);
+    if (gr.pk.length === 1) await req(`/rest/v1/${gr.table}?${gr.pk[0]}=in.(${part.map(enc).join(',')})`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+    else {
+      const cond = part.map(k => { const vs = k.split('|'); return 'and(' + gr.pk.map((p, j) => `${p}.eq.${enc(vs[j])}`).join(',') + ')'; }).join(',');
+      await req(`/rest/v1/${gr.table}?or=(${encodeURIComponent(cond)})`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+    }
+  }
+}
+async function push(db) {
+  if (!auth || !snap) return;
+  if (pushing) { again = true; return; }
+  pushing = true; emit();
+  try {
+    const role = auth.member?.role;
+    const ds = diff(db);
+    for (const gr of ds) {
+      for (let i = 0; i < gr.up.length; i += 500) {
+        const conflict = gr.conflict || gr.pk.join(',');
+        await req(`/rest/v1/${gr.table}?on_conflict=${conflict}`, { method: 'POST', body: gr.up.slice(i, i + 500), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      }
+      gr.up.forEach(r => { snap[gr.name] = snap[gr.name] || {}; snap[gr.name][rowKey(gr.pk, r)] = JSON.stringify(r); });
+    }
+    for (const gr of ds.slice().reverse()) {
+      if (gr.del.length) await doDelete(gr, gr.del);
+      gr.del.forEach(k => { delete snap[gr.name][k]; });
+    }
+    // المعلم يعدّل بياناته الشخصية والفنية عبر دالة مخصّصة (لا يملك تعديل جدول الأعضاء)
+    if (role === 'teacher') {
+      const me = (db.teachers || []).find(t => t.id === auth.member.id);
+      if (me) {
+        const r = memberRow(me, 'teacher'), k = r.id, j = JSON.stringify(r);
+        if (snap.staff && snap.staff[k] !== j) {
+          await rpc('update_my_profile', { member: me.id, personal: me.personal || {}, tech: me.tech || {}, new_phone: me.phone || '' });
+          snap.staff[k] = j;
+        }
+      }
+    }
+    LS.set(snapKey(), snap);
+    lastSync = new Date(); lastError = '';
+  } catch (e) {
+    lastError = e.message || String(e);
+    if (e instanceof HttpError && e.status >= 400 && e.status < 500 && e.status !== 401) {
+      // رفض من الخادم (صلاحية أو قيد): نعيد تحميل الحقيقة من الخادم حتى لا تبقى نسخة متعارضة
+      emit(); throw e;
+    }
+  } finally {
+    pushing = false; emit();
+    if (again) { again = false; schedule(db, 300); }
+  }
+}
+function schedule(db, ms = 800) { clearTimeout(timer); timer = setTimeout(() => push(db).catch(err => onReject?.(err)), ms); }
+let onReject = null;
+
+/* ---------------- النسخة المحلية ---------------- */
+const dbKey = () => 'qcloud_db_' + (auth?.uid || 'x');
+const snapKey = () => 'qcloud_snap_' + (auth?.uid || 'x');
+function saveLocal(db) { LS.set(dbKey(), db); if (snap) LS.set(snapKey(), snap); }
+function cached() { if (!auth) return null; snap = LS.get(snapKey()); return LS.get(dbKey()); }
+async function publicSettings() {
+  const rows = await req('/rest/v1/settings?select=key,value', { anon: true });
+  const s = {}; (rows || []).forEach(r => { s[r.key] = r.value; }); return s;
+}
+
+window.Cloud = {
+  get enabled() { return !!CFG.url; },
+  get signedIn() { return !!auth; },
+  get auth() { return auth; },
+  get busy() { return pushing; },
+  get lastError() { return lastError; },
+  get lastSync() { return lastSync; },
+  cfg: CFG, uuid, isUuid, ensureUuids, emptyDb, snapshotOf,
+  signIn, signOut, lookup, setMember, pull, push, schedule, pendingCount, cached, saveLocal, publicSettings,
+  provision, fn, rpc, req, selectAll,
+  set onReject(f) { onReject = f; },
+  on: f => { listeners.add(f); return () => listeners.delete(f); },
+  /* لاختبار ربط حساب جديد بالدخول دون المساس بجلسة الإداري */
+  async testSignIn(email, password) {
+    const r = await fetch(`${CFG.url}/auth/v1/token?grant_type=password`, { method: 'POST', headers: { apikey: CFG.key, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new HttpError(r.status, j.error_description || j.msg || 'تعذّر الدخول');
+    return j;
+  }
+};
+})();
