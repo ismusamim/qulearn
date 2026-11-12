@@ -229,7 +229,11 @@ let uiPref = {};
 try { uiPref = JSON.parse(localStorage.getItem(UIKEY) || '{}') || {}; } catch (e) { /* ignore */ }
 const saveUI = () => { try { localStorage.setItem(UIKEY, JSON.stringify({ sideW: ui.sideW, collapsed: ui.collapsed })); } catch (e) { /* ignore */ } };
 const clampW = w => Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(w) || SIDE_W));
-const ui = { fcat: '', nav: false, sideW: clampW(uiPref.sideW), collapsed: !!uiPref.collapsed, pick: null, tab: null, hid: '', date: today(), fh: '', psub: 'personal', msub: 'teachers', shown: {} };
+let tabPref = {};
+try { tabPref = JSON.parse(ss.get('halaqat_tab') || '{}') || {}; } catch (e) { /* ignore */ }
+const ui = { fcat: '', nav: false, sideW: clampW(uiPref.sideW), collapsed: !!uiPref.collapsed, pick: null, tab: tabPref.tab || null, hid: '', date: today(), fh: '', psub: 'personal', msub: tabPref.msub || 'teachers', shown: {}, sel: new Set() };
+/* آخر تبويب مفتوح يُستعاد عند إعادة تحميل الصفحة */
+const saveTab = () => ss.set('halaqat_tab', JSON.stringify({ tab: ui.tab, msub: ui.msub }));
 
 /* ============ دوال مساعدة للمجال ============ */
 /* الحلقة تُسمّى باسم معلمها؛ وإن كان للمعلم أكثر من حلقة يُضاف اسم المكان للتمييز */
@@ -491,7 +495,7 @@ function render() {
     <div class="side-resize" role="separator" aria-orientation="vertical" aria-label="تغيير اتساع القائمة" title="اسحب لتغيير الاتساع — نقر مزدوج للاتساع الافتراضي" tabindex="0" aria-valuemin="${SIDE_MIN}" aria-valuemax="${SIDE_MAX}" aria-valuenow="${ui.sideW}"></div>
     <div class="brand"><img class="hlogo" src="${logoSrc()}" alt=""><div><h1>${esc(db.settings.org)}</h1><small>${esc(who)}</small><button type="button" class="logout-mini" data-act="logout">${TAB_ICONS.logout}<span>خروج</span></button></div></div>
     <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === ui.tab ? 'on' : ''}" data-act="tab" data-v="${k}" title="${l}"><span class="ti">${tabIcon(k)}</span><span class="tl">${l}</span>${k === 'pending' && db.pending.length ? `<span class="count">${db.pending.length}</span>` : ''}</button>`).join('')}</nav>
-    <div class="side-foot">${sw}<button class="btn logout-c" data-act="logout" title="خروج" aria-label="خروج">${TAB_ICONS.logout}</button><button class="btn side-toggle" data-act="sideToggle" title="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-label="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-expanded="${!ui.collapsed}">${TAB_ICONS.fold}</button></div>
+    <div class="side-foot">${sw}<button class="btn side-toggle" data-act="sideToggle" title="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-label="${ui.collapsed ? 'فرد القائمة' : 'طي القائمة'}" aria-expanded="${!ui.collapsed}">${TAB_ICONS.fold}</button></div>
   </aside>
   <div class="scrim" data-act="navClose"></div>
   <div class="content">
@@ -532,13 +536,14 @@ const adminViews = {
     if (kind === 'unclassified') return unclassView(`<div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}</div>`);
     const one = KIND_ONE[kind];
     const others = m => accounts().filter(a => norm(a.u.name) === norm(m.name) && a.u.id !== m.id).map(a => ROLE_L[a.role]);
-    const rows = db[kind].map((m, i) => { const o = others(m); return `<tr><td>${i + 1}</td><td>${esc(m.name)}${o.length ? ` <span class="tag" title="نفس الاسم له حساب آخر">+ ${esc(o.join('، '))}</span>` : ''}</td>
+    ui.sel = new Set([...ui.sel].filter(id => db[kind].some(m => m.id === id)));
+    const rows = db[kind].map((m, i) => { const o = others(m); return `<tr><td class="selc"><input type="checkbox" data-sel="${m.id}" ${ui.sel.has(m.id) ? 'checked' : ''} aria-label="تحديد ${esc(m.name)}"></td><td>${i + 1}</td><td>${esc(m.name)}${o.length ? ` <span class="tag" title="نفس الاسم له حساب آخر">+ ${esc(o.join('، '))}</span>` : ''}</td>
       <td>${CLOUD ? (m.hasLogin ? '<span class="tag tag-ok">له حساب دخول</span>' : '<span class="tag">بلا حساب</span>') : `<code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button>`}</td>
       <td>${CLOUD ? `<button class="btn sm" data-act="cloudPw" data-id="${m.id}" data-k="${kind}">${m.hasLogin ? 'كلمة جديدة' : 'إنشاء حساب'}</button>` : `<button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button>`}<button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="delMember" data-id="${m.id}" data-k="${kind}">حذف</button></td></tr>`; }).join('');
     const tip = kind === 'supervisors' ? 'حدّد حلقات كل مشرف من تبويب «الحلقات» ← تعديل ← المشرف.' : 'عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل باسمه وكلمة مروره من صفحة الدخول.';
-    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}<span class="grow"></span><button class="btn" data-act="dupOpen">الأسماء المتشابهة</button>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
+    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}<span class="grow"></span>${ui.sel.size ? `<button class="btn danger" data-act="delSel">حذف المحدد (${ui.sel.size})</button>` : ''}<button class="btn" data-act="dupOpen">الأسماء المتشابهة</button>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
     <div class="note">${CLOUD ? 'كلمات المرور محفوظة على الخادم ولا يمكن عرضها؛ تظهر مرة واحدة عند إنشاء الحساب أو تغييرها، فسلّمها لأصحابها.' : tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
-    ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>${CLOUD ? 'حساب الدخول' : 'كلمة المرور'}</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
+    ${db[kind].length ? `<div class="tbl"><table><tr><th class="selc"><input type="checkbox" data-selall ${ui.sel.size && ui.sel.size === db[kind].length ? 'checked' : ''} aria-label="تحديد الكل"></th><th>#</th><th>الاسم</th><th>${CLOUD ? 'حساب الدخول' : 'كلمة المرور'}</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
   pending() {
     const kindL = { students: 'الطلاب', teachers: 'المعلمون' };
