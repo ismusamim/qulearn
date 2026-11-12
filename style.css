@@ -362,3 +362,11 @@ select.mini{width:auto;padding:.15rem .35rem;font-size:.85rem}
 #netpill{position:fixed;bottom:1rem;right:50%;transform:translateX(50%);z-index:65;padding:.45rem 1rem;border-radius:99px;font-size:.85rem;font-weight:600;
   color:#fff;background:rgba(183,121,31,.92);background:color-mix(in srgb,var(--amber) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);box-shadow:0 6px 18px rgba(0,0,0,.18);max-width:92vw;text-align:center}
 @media print{#netpill{display:none!important}}
+
+/* ===== أيقونة التحميل على الأزرار أثناء العمليات ===== */
+.btn.loading,.mode.loading{position:relative;cursor:progress;opacity:.9}
+.btn.loading::before{content:"";display:inline-block;flex:none;width:1em;height:1em;margin-inline-end:.45em;vertical-align:-.16em;box-sizing:border-box;
+  border:2px solid currentColor;border-inline-end-color:transparent;border-radius:50%;animation:btnspin .7s linear infinite}
+.btn.loading:disabled{opacity:.9}
+@keyframes btnspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.btn.loading::before{animation-duration:1.8s}}
