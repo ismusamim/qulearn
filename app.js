@@ -105,6 +105,7 @@ function load() {
   return d;
 }
 let db = load();
+const validBackup = d => !!d && !!d.settings && ['teachers', 'halaqat', 'students', 'attendance', 'records', 'news'].every(k => Array.isArray(d[k]));
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('تعذّر حفظ البيانات في المتصفح'); } };
 
 /* ============ المظهر: الألوان والشعار ============ */
@@ -452,6 +453,7 @@ const adminViews = {
     <div class="bar"><button class="btn" data-act="editSettings">اسم المؤسسة</button>
     <button class="btn" data-act="export">تصدير نسخة احتياطية</button>
     <label class="btn" style="margin:0">استيراد نسخة<input type="file" accept="application/json" data-change="import" hidden></label>
+    <button class="btn" data-act="pasteBackup">لصق نسخة</button>
     <button class="btn danger" data-act="reset">مسح كل البيانات</button></div></div>`;
   }
 };
@@ -887,10 +889,26 @@ const A = {
   editSettings: () => openForm('الإعدادات', [{ name: 'org', label: 'اسم المؤسسة', value: db.settings.org, required: true }, { type: 'note', label: 'كلمات مرور الإداريين تُدار من تبويب «الأعضاء» ← الإداريون.' }],
     v => { db.settings.org = v.org.trim(); }),
   export: () => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
-    a.download = `halaqat-backup-${today()}.json`; a.click(); URL.revokeObjectURL(a.href);
+    const json = JSON.stringify(db);
+    try {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+      a.download = `halaqat-backup-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) { /* بعض البيئات تمنع التنزيل */ }
+    /* بديل يعمل في كل مكان: النص كاملًا للنسخ واللصق */
+    openInfo('النسخة الاحتياطية', `<p class="muted">إن لم يبدأ التنزيل، انسخ النص كاملًا واحفظه أو أرسله لنفسك، ثم استخدم «لصق نسخة» على الجهاز الآخر. النص يحتوي كلمات المرور والمرتبات فاحفظه بأمان.</p><textarea id="bk" rows="7" readonly dir="ltr" style="font-family:ui-monospace,monospace;font-size:.72rem">${esc(json)}</textarea><div class="row"><button class="btn primary" data-act="copyBackup">نسخ الكل</button><span class="muted" style="align-self:center">${Math.round(json.length / 1024)} ك.ب</span></div>`);
   },
+  copyBackup: () => {
+    const t = document.getElementById('bk'); if (!t) return;
+    t.focus(); t.select();
+    const fallback = () => { let ok = false; try { ok = document.execCommand('copy'); } catch (e) { /* ignore */ } toast(ok ? 'تم النسخ' : 'حدّد النص وانسخه يدويًا'); };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t.value).then(() => toast('تم النسخ'), fallback); else fallback();
+  },
+  pasteBackup: () => openForm('لصق نسخة احتياطية', [{ type: 'note', label: 'سيتم استبدال كل البيانات الحالية على هذا الجهاز بالنسخة الملصقة.' }, { name: 'json', label: 'الصق نص النسخة الاحتياطية هنا', type: 'textarea', required: true }], v => {
+    let d; try { d = JSON.parse(v.json); } catch (e) { return 'النص غير صالح — تأكد من نسخه كاملًا'; }
+    if (!validBackup(d)) return 'هذا النص ليس نسخة احتياطية من التطبيق';
+    db = migrate(d); session = null; ss.del(SKEY); applyTheme(); toast('تم الاستيراد — ادخل بحسابك');
+  }),
   reset: () => ask('سيتم مسح كل البيانات نهائيًا. متابعة؟', () => { db = seed(); session = null; ss.del(SKEY); save(); render(); toast('تمت إعادة التهيئة'); }),
 
   att: d => {
@@ -958,8 +976,8 @@ document.addEventListener('change', e => {
     rd.onload = () => {
       try {
         const d = JSON.parse(rd.result);
-        if (!['teachers', 'halaqat', 'students', 'attendance', 'records', 'news'].every(k => Array.isArray(d[k])) || !d.settings) throw new Error('bad');
-        ask('سيتم استبدال البيانات الحالية. متابعة؟', () => { db = migrate(d); session = null; ss.del(SKEY); save(); render(); toast('تم الاستيراد'); });
+        if (!validBackup(d)) throw new Error('bad');
+        ask('سيتم استبدال البيانات الحالية. متابعة؟', () => { db = migrate(d); session = null; ss.del(SKEY); applyTheme(); save(); render(); toast('تم الاستيراد'); });
       } catch (err) { toast('ملف غير صالح'); }
     };
     rd.readAsText(f);
