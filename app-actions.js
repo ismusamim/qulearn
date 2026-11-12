@@ -1,8 +1,8 @@
 'use strict';
 /* الجزء الثالث: الإجراءات، وأحداث الصفحة، وقاعدة البيانات، والتشغيل */
-/* كلمة المرور 10 خانات: بادئة بحسب النوع + 6 أرقام (tech للمعلم، mang للمدير، stud للطالب، supe للمشرف) */
-const PASS_PREFIX = { teacher: 'tech', teachers: 'tech', admin: 'mang', admins: 'mang', student: 'stud', students: 'stud', supervisor: 'supe', supervisors: 'supe' };
-const PASS_RE = /^(tech|mang|stud|supe)\d{6}$/;
+/* كلمة المرور 10 خانات: بادئة بحسب النوع + 6 أرقام (tech للمعلم، mang للمدير، stud للطالب، supe للمشرف، acnt للمحاسب) */
+const PASS_PREFIX = { teacher: 'tech', teachers: 'tech', admin: 'mang', admins: 'mang', student: 'stud', students: 'stud', supervisor: 'supe', supervisors: 'supe', accountant: 'acnt', accountants: 'acnt' };
+const PASS_RE = /^(tech|mang|stud|supe|acnt)\d{6}$/;
 const genPassK = kind => (PASS_PREFIX[kind] || 'user') + genPass();
 TAB_ICONS.print = svg('<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>');
 /* إعادة الرسم تحفظ موضع التمرير داخل الجداول: إن رُسم الجدول نفسه (نفس رأسه) يعود إلى موضعه بدل القفز للأعلى */
@@ -481,7 +481,7 @@ async function cloudMakeLogins(list, fresh = false) {
     let legacy = {}; try { legacy = JSON.parse(localStorage.getItem('qcloud_legacy_pins') || '{}'); } catch (e) { /* ignore */ }
     const items = list.map(m => {
       const old = String(m.pin || legacy[m.id] || '');
-      const kind = ['teachers', 'supervisors', 'students', 'admins'].find(k => (db[k] || []).includes(m));
+      const kind = ['teachers', 'supervisors', 'students', 'accountants', 'admins'].find(k => (db[k] || []).includes(m));
       const password = !fresh && PASS_RE.test(old) ? old : genPassK(kind);
       const twin = accounts().find(a => a.u.id !== m.id && a.u.hasLogin && norm(a.u.name) === norm(m.name));
       return { member_id: m.id, password, share_with: twin?.u.id, name: m.name, m };
@@ -498,7 +498,7 @@ async function cloudMakeLogins(list, fresh = false) {
 /* ============ إرسال بيانات الدخول لأصحابها ============
    كلمات المرور محفوظة على الخادم مشفّرة باتجاه واحد فلا يمكن عرضها لأحد؛ لذلك تُنشأ كلمة جديدة لمن يختاره المدير
    (بعد إدخال كلمة مروره)، وتظهر مرة واحدة فقط مع رسالة جاهزة تُرسل لكل شخص على انفراد. لا تُحفظ الكلمات على الجهاز. */
-const KIND_TITLE = { teachers: 'المعلمون', students: 'الطلاب', supervisors: 'المشرفون', admins: 'المديرون' };
+const KIND_TITLE = { teachers: 'المعلمون', students: 'الطلاب', supervisors: 'المشرفون', accountants: 'المحاسبون', admins: 'المديرون' };
 /* رقم واتساب العضو: لولي الأمر في حالة الطالب الصغير، وإلا رقمه هو */
 function waNum(m) {
   const I = m.info || {}, P = m.personal || {};
@@ -1045,7 +1045,7 @@ function printTable(tbl) {
 /* ============ التحديث التلقائي عند توفّر نسخة جديدة ============
    يقارن بصمة ملفات التطبيق على الخادم؛ إن تغيّرت (نُشر تحديث) يُعاد التحميل تلقائيًا
    بعد إرسال أي تغييرات معلّقة، ولا يقاطع نافذة مفتوحة أو حقلًا قيد الكتابة. */
-const VFILES = ['./index.html', './style.css', './app.js', './app-forms.js', './app-actions.js', './payroll.js', './cloud.js'];
+const VFILES = ['./index.html', './style.css', './app.js', './app-forms.js', './fees.js', './perms.js', './accountant.js', './app-actions.js', './payroll.js', './cloud.js'];
 let verBase = null, verBusy = false, updWait = null;
 async function verSig() {
   const parts = await Promise.all(VFILES.map(f => fetch(f + '?v=' + Date.now(), { method: 'HEAD', cache: 'no-store' })
