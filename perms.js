@@ -7,7 +7,7 @@
    - يعرف كل مستخدم صلاحياته من الخادم (my_perms)، ويسألها التطبيق بـ can('<صلاحية>'). */
 (() => {
   const DEFS = [];
-  const ROLE_COLS = [['teacher', 'المعلمون', 'teachers'], ['supervisor', 'المشرفون', 'supervisors']];
+  const ROLE_COLS = [['teacher', 'المعلمون', 'teachers'], ['supervisor', 'المشرفون', 'supervisors'], ['accountant', 'المحاسبون', 'accountants']];
   const st = { q: '' };
 
   TABS.admin.splice(TABS.admin.findIndex(t => t[0] === 'settings'), 0, ['perms', 'الصلاحيات']);
@@ -18,7 +18,9 @@
   const cfg = () => { const c = db.settings.priv_perms || {}; return { roles: c.roles || {}, members: c.members || {} }; };
   const setCfg = c => { db.settings.priv_perms = { roles: c.roles, members: c.members }; save(); };
   const staff = () => ROLE_COLS.flatMap(([r, , coll]) => (db[coll] || []).map(m => ({ m, role: r })));
-  const roleL = r => ({ teacher: 'معلم', supervisor: 'مشرف' })[r] || r;
+  const roleL = r => ({ teacher: 'معلم', supervisor: 'مشرف', accountant: 'محاسب' })[r] || r;
+  /* صلاحية الفئة: اختيار المدير إن وُجد، وإلا الافتراضي المعرَّف مع الصلاحية (مثل صلاحيات المحاسب) */
+  const roleHas = (c, r, p) => { const v = (c.roles[r] || {})[p]; return v !== undefined ? !!v : !!DEFS.find(d => d.key === p)?.defaults?.includes(r); };
 
   /* هل يملك المستخدم الحالي الصلاحية؟ المدير دائمًا؛ وغيره بحسب ما أرسله الخادم */
   function can(p) {
@@ -26,11 +28,10 @@
     if (session.role === 'admin') return true;
     if (!CLOUD) {
       const c = cfg(), o = (c.members[session.id] || {})[p];
-      return o !== undefined ? !!o : !!(c.roles[session.role] || {})[p];
+      return o !== undefined ? !!o : roleHas(c, session.role, p);
     }
     return (db.myPerms || []).includes(p);
   }
-  const effective = (id, role, p) => { const c = cfg(), o = (c.members[id] || {})[p]; return o !== undefined ? !!o : !!(c.roles[role] || {})[p]; };
 
   function view() {
     const c = cfg();
@@ -44,7 +45,7 @@
         <p class="muted" style="font-size:.85rem;margin:.8rem 0 0">المدير يملك كل الصلاحيات دائمًا. والتحقق يتم على الخادم، فلا يكفي إخفاء الزر لتجاوزها.</p></div>`;
     }
     const roleTable = `<div class="tbl"><table><tr><th>الصلاحية</th>${ROLE_COLS.map(([, l]) => `<th style="text-align:center">${l}</th>`).join('')}</tr>
-      ${DEFS.map(d => `<tr><td><b>${esc(d.label)}</b>${d.desc ? `<br><small class="muted">${esc(d.desc)}</small>` : ''}</td>${ROLE_COLS.map(([r, l]) => `<td style="text-align:center"><input type="checkbox" data-prole="${r}" data-perm="${esc(d.key)}" ${(c.roles[r] || {})[d.key] ? 'checked' : ''} aria-label="${esc(d.label)} — ${l}"></td>`).join('')}</tr>`).join('')}</table></div>`;
+      ${DEFS.map(d => `<tr><td><b>${esc(d.label)}</b>${d.desc ? `<br><small class="muted">${esc(d.desc)}</small>` : ''}</td>${ROLE_COLS.map(([r, l]) => `<td style="text-align:center"><input type="checkbox" data-prole="${r}" data-perm="${esc(d.key)}" ${roleHas(c, r, d.key) ? 'checked' : ''} aria-label="${esc(d.label)} — ${l}"></td>`).join('')}</tr>`).join('')}</table></div>`;
     const ids = Object.keys(c.members);
     const people = staff();
     const exRows = ids.map(id => {
@@ -53,23 +54,24 @@
       return `<tr><td><b>${esc(p.m.name)}</b><br><small class="muted">${roleL(p.role)}</small></td>${DEFS.map(d => {
         const o = (c.members[id] || {})[d.key], v = o === undefined ? '' : o ? '1' : '0';
         return `<td><select data-pmem="${esc(id)}" data-perm="${esc(d.key)}" style="width:auto">
-          <option value="" ${v === '' ? 'selected' : ''}>حسب فئته (${(c.roles[p.role] || {})[d.key] ? 'مسموح' : 'ممنوع'})</option>
+          <option value="" ${v === '' ? 'selected' : ''}>حسب فئته (${roleHas(c, p.role, d.key) ? 'مسموح' : 'ممنوع'})</option>
           <option value="1" ${v === '1' ? 'selected' : ''}>مسموح</option><option value="0" ${v === '0' ? 'selected' : ''}>ممنوع</option></select></td>`;
       }).join('')}<td><button type="button" class="btn sm danger" data-pclear="${esc(id)}">إلغاء الاستثناء</button></td></tr>`;
     }).join('');
     const q = norm(st.q), cand = q ? people.filter(x => !ids.includes(x.m.id) && norm(x.m.name).includes(q)).slice(0, 8) : [];
     return `<div class="card"><h2>صلاحيات الفئات</h2>
-        <p class="muted" style="font-size:.85rem;margin:0 0 .6rem">ما تختاره هنا يسري على كل أفراد الفئة، إلا من له استثناء أدناه. المدير يملك كل الصلاحيات دائمًا.</p>${roleTable}</div>
+        <p class="muted" style="font-size:.85rem;margin:0 0 .6rem">ما تختاره هنا يسري على كل أفراد الفئة، إلا من له استثناء أدناه. المدير يملك كل الصلاحيات دائمًا. صلاحيات المحاسب مفعّلة له افتراضيًا، ويمكنك سحب أي منها.</p>${roleTable}</div>
       <div class="card"><h2>استثناءات لأفراد</h2>
         <p class="muted" style="font-size:.85rem;margin:0 0 .6rem">امنح صلاحية لشخص بعينه أو اسحبها منه، أيًّا كانت صلاحية فئته.</p>
-        <div class="combo" style="max-width:420px"><label>إضافة شخص<input type="search" data-pq value="${esc(st.q)}" placeholder="اكتب اسم معلم أو مشرف" autocomplete="off"></label>
+        <div class="combo" style="max-width:420px"><label>إضافة شخص<input type="search" data-pq value="${esc(st.q)}" placeholder="اكتب اسم معلم أو مشرف أو محاسب" autocomplete="off"></label>
           ${cand.length ? `<div class="results">${cand.map(x => `<button type="button" class="opt" data-padd="${esc(x.m.id)}">${esc(x.m.name)} <small class="muted">— ${roleL(x.role)}</small></button>`).join('')}</div>` : q ? '<p class="muted">لا نتائج.</p>' : ''}</div>
         ${exRows ? `<div class="tbl" style="margin-top:.8rem"><table><tr><th>الشخص</th>${DEFS.map(d => `<th>${esc(d.label)}</th>`).join('')}<th></th></tr>${exRows}</table></div>` : '<p class="muted" style="margin-top:.8rem">لا توجد استثناءات.</p>'}</div>`;
   }
 
   document.addEventListener('change', e => {
     const t = e.target, d = t.dataset || {};
-    if (d.prole) { const c = cfg(); c.roles[d.prole] = { ...(c.roles[d.prole] || {}), [d.perm]: t.checked }; if (!t.checked) delete c.roles[d.prole][d.perm]; setCfg(c); toast('حُفظ'); return; }
+    /* يُحفظ الاختيار صريحًا (مسموح أو ممنوع) حتى يمكن سحب صلاحية افتراضية */
+    if (d.prole) { const c = cfg(); c.roles = { ...c.roles, [d.prole]: { ...(c.roles[d.prole] || {}), [d.perm]: t.checked } }; setCfg(c); render(); toast('حُفظ'); return; }
     if (d.pmem) {
       const c = cfg(), m = { ...(c.members[d.pmem] || {}) };
       if (t.value === '') delete m[d.perm]; else m[d.perm] = t.value === '1';
@@ -89,7 +91,7 @@
   });
 
   window.Perms = {
-    /* تعريف صلاحية قابلة للتوزيع: { key, label, desc } */
+    /* تعريف صلاحية قابلة للتوزيع: { key, label, desc, defaults: [الفئات التي تملكها افتراضيًا] } */
     define(def) { if (def?.key && !DEFS.some(x => x.key === def.key)) DEFS.push(def); },
     get list() { return DEFS.slice(); },
     can
