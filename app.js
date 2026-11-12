@@ -26,9 +26,9 @@ const TABS = {
 };
 /* أنواع الحسابات: كل نوع ومجموعته في قاعدة البيانات */
 const ROLES = ['teacher', 'student', 'supervisor', 'admin'];
-const ROLE_L = { student: 'طالب', teacher: 'معلم', supervisor: 'مشرف', admin: 'إداري' };
+const ROLE_L = { student: 'طالب', teacher: 'معلم', supervisor: 'مشرف', admin: 'مدير' };
 const COLL = { student: 'students', teacher: 'teachers', supervisor: 'supervisors', admin: 'admins' };
-const KIND_ONE = { students: 'طالب', teachers: 'معلم', supervisors: 'مشرف', admins: 'إداري' };
+const KIND_ONE = { students: 'طالب', teachers: 'معلم', supervisors: 'مشرف', admins: 'مدير' };
 
 /* ============ ملف المعلم الداخلي ============ */
 // كل حقل: [المفتاح, العنوان, النوع, خيارات]
@@ -522,15 +522,18 @@ const adminViews = {
     return `<div class="grid">${stats.map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>${newsView('admin')}`;
   },
   members() {
-    const subs = [['teachers', 'المعلمون'], ['students', 'الطلاب'], ['supervisors', 'المشرفون'], ['admins', 'الإداريون']];
+    const subs = [['unclassified', 'غير مصنف'], ['teachers', 'المعلمون'], ['students', 'الطلاب'], ['supervisors', 'المشرفون'], ['admins', 'المديرون']];
     const kind = subs.some(x => x[0] === ui.msub) ? ui.msub : 'teachers';
+    /* موظفو المرتبات يظهرون هنا تلقائيًا حتى يُحدَّد تصنيف كل منهم */
+    const cnt = k => (k === 'unclassified' ? unclassCount() : db[k].length);
+    if (kind === 'unclassified') return unclassView(`<div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}</div>`);
     const one = KIND_ONE[kind];
     const others = m => accounts().filter(a => norm(a.u.name) === norm(m.name) && a.u.id !== m.id).map(a => ROLE_L[a.role]);
     const rows = db[kind].map((m, i) => { const o = others(m); return `<tr><td>${i + 1}</td><td>${esc(m.name)}${o.length ? ` <span class="tag" title="نفس الاسم له حساب آخر">+ ${esc(o.join('، '))}</span>` : ''}</td>
       <td>${CLOUD ? (m.hasLogin ? '<span class="tag tag-ok">له حساب دخول</span>' : '<span class="tag">بلا حساب</span>') : `<code class="pw">${ui.shown[m.id] ? esc(m.pin) : '••••••'}</code> <button class="btn sm" data-act="togglePw" data-id="${m.id}">${ui.shown[m.id] ? 'إخفاء' : 'إظهار'}</button>`}</td>
       <td>${CLOUD ? `<button class="btn sm" data-act="cloudPw" data-id="${m.id}" data-k="${kind}">${m.hasLogin ? 'كلمة جديدة' : 'إنشاء حساب'}</button>` : `<button class="btn sm" data-act="copyPw" data-id="${m.id}" data-k="${kind}">نسخ</button><button class="btn sm" data-act="newPw" data-id="${m.id}" data-k="${kind}">كلمة جديدة</button>`}<button class="btn sm" data-act="editName" data-id="${m.id}" data-k="${kind}">الاسم</button><button class="btn sm danger" data-act="delMember" data-id="${m.id}" data-k="${kind}">حذف</button></td></tr>`; }).join('');
     const tip = kind === 'supervisors' ? 'حدّد حلقات كل مشرف من تبويب «الحلقات» ← تعديل ← المشرف.' : 'عند إضافة عضو تُنشأ كلمة المرور تلقائيًا (6 أرقام). سلّمها للعضو ليدخل باسمه وكلمة مروره من صفحة الدخول.';
-    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${db[k].length})</button>`).join('')}<span class="grow"></span>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
+    return `<div class="card"><div class="bar">${subs.map(([k, l]) => `<button class="btn ${k === kind ? 'on' : ''}" data-act="msub" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}<span class="grow"></span>${kind === 'teachers' || kind === 'students' ? `<button class="btn" data-act="importMembers" data-k="${kind}">استيراد من Excel / Sheets</button>` : ''}${CLOUD && db[kind].some(m => !m.hasLogin) ? `<button class="btn" data-act="cloudPwAll" data-k="${kind}">إنشاء حسابات الدخول (${db[kind].filter(m => !m.hasLogin).length})</button>` : ''}<button class="btn primary" data-act="addMember" data-k="${kind}">+ ${one}</button></div>
     <div class="note">${CLOUD ? 'كلمات المرور محفوظة على الخادم ولا يمكن عرضها؛ تظهر مرة واحدة عند إنشاء الحساب أو تغييرها، فسلّمها لأصحابها.' : tip} إذا تكرر الاسم نفسه في أكثر من نوع، يظهر لصاحبه خيار تبديل الوضع عند الدخول.</div>
     ${db[kind].length ? `<div class="tbl"><table><tr><th>#</th><th>الاسم</th><th>${CLOUD ? 'حساب الدخول' : 'كلمة المرور'}</th><th></th></tr>${rows}</table></div>` : empty('لا يوجد أعضاء بعد.')}</div>`;
   },
