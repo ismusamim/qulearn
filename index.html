@@ -16,6 +16,11 @@
   <div id="splash"><img src="logo.png" alt="إدارة الحلقات القرآنية"><div class="gbar"><i></i></div></div>
   <div id="app"></div>
   <div id="toast" class="toast" hidden></div>
+  <script>
+    /* الأرقام إنجليزية دائمًا: كروم يعرض أرقام خانات الأرقام والتاريخ بلغة الصفحة (العربية)، فنجعل لغة هذه الخانات إنجليزية */
+    new MutationObserver(() => document.querySelectorAll('input[type=number]:not([lang]),input[type=date]:not([lang]),input[type=tel]:not([lang])')
+      .forEach(i => { i.lang = i.type === 'date' ? 'en-GB' : 'en'; })).observe(document.documentElement, { childList: true, subtree: true });
+  </script>
   <script src="cloud.js"></script>
   <script src="payroll.js"></script>
   <script src="app.js"></script>
