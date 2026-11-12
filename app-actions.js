@@ -18,11 +18,11 @@ const A = {
     openForm('كلمة مرور حساب ' + ROLE_L[d.r], [{ name: 'pin', label: 'كلمة المرور', type: 'password', required: true }], v => { if (v.pin !== acc.pin) return 'كلمة المرور غير صحيحة'; go(); });
   },
   logout: () => {
-    ui.shown = {}; ui.pick = null; session = null; ss.del(SKEY); ui.tab = null;
+    ui.shown = {}; ui.pick = null; session = null; ss.del(SKEY); ss.del('halaqat_tab'); ui.tab = null; ui.sel = new Set();
     if (CLOUD) { const s = db.settings; window.Cloud.signOut(); db = migrate({ ...window.Cloud.emptyDb(), settings: s }); }
     render();
   },
-  tab: d => { ui.tab = d.v; ui.nav = false; render(); window.scrollTo(0, 0); },
+  tab: d => { ui.tab = d.v; ui.nav = false; saveTab(); render(); window.scrollTo(0, 0); },
   navToggle: () => { ui.nav = !ui.nav; document.querySelector('.shell')?.classList.toggle('open', ui.nav); },
   sideToggle: () => {
     /* تبديل الصنف فقط دون إعادة الرسم، حتى تعمل الحركة الانسيابية */
@@ -46,7 +46,8 @@ const A = {
     });
   },
 
-  msub: d => { ui.msub = d.v; render(); },
+  msub: d => { ui.msub = d.v; ui.sel = new Set(); saveTab(); render(); },
+  delSel: () => delMembersDialog(ui.msub, [...ui.sel]),
   importMembers: d => { if (session?.role === 'admin') openImport(d.k === 'students' ? 'students' : 'teachers'); },
   togglePw: d => { ui.shown[d.id] = !ui.shown[d.id]; render(); },
   copyPw: d => {
@@ -94,17 +95,7 @@ const A = {
   editStudent: d => { document.querySelectorAll('.overlay').forEach(o => o.remove()); studentForm(byId(db.students, d.id)); },
   studentCard: d => studentCard(byId(db.students, d.id)),
   printCard: () => { document.body.classList.add('print-modal'); window.print(); setTimeout(() => document.body.classList.remove('print-modal'), 500); },
-  delMember: d => {
-    if (d.k === 'teachers') return A.delTeacher(d);
-    if (d.k === 'students') return A.delStudent(d);
-    if (d.k === 'admins') {
-      if (db.admins.length < 2) { toast('لا يمكن حذف آخر إداري'); return; }
-      if (session.role === 'admin' && session.id === d.id) { toast('لا يمكنك حذف حسابك الحالي'); return; }
-      ask('حذف الإداري؟', async () => { await cloudUnlink(d.id); db.admins = db.admins.filter(a => a.id !== d.id); save(); render(); });
-      return;
-    }
-    ask('حذف المشرف؟ ستبقى حلقاته بدون مشرف.', async () => { await cloudUnlink(d.id); db.supervisors = db.supervisors.filter(x => x.id !== d.id); db.halaqat.forEach(h => { if (h.supervisorId === d.id) h.supervisorId = ''; }); save(); render(); });
-  },
+  delMember: d => delMembersDialog(d.k, [d.id]),
   approvePending: d => {
     const p = db.pending.find(x => x.id === d.id), card = document.querySelector(`[data-pcard="${d.id}"]`);
     if (!p || !card) return;
@@ -245,6 +236,8 @@ document.addEventListener('change', e => {
   if (el.dataset.pay && window.Payroll) { window.Payroll.onChange(e); return; }
   if (el.dataset.color) { save(); return; }
   if (el.dataset.cls) { classifyEmp(el.dataset.cls, el.value); return; }
+  if (el.dataset.sel) { el.checked ? ui.sel.add(el.dataset.sel) : ui.sel.delete(el.dataset.sel); render(); return; }
+  if ('selall' in el.dataset) { ui.sel = el.checked ? new Set((db[ui.msub] || []).map(m => m.id)) : new Set(); render(); return; }
   if (!c) return;
   if (c === 'logo') {
     const f = el.files[0]; el.value = '';
@@ -709,6 +702,197 @@ async function installApp() {
   document.getElementById('installpop')?.remove();
 }
 
+/* ============ حذف عضو أو عدة أعضاء (بتأكيد كلمة مرور المدير) ============ */
+function delMembersDialog(kind, ids) {
+  if (session?.role !== 'admin' || !ids.length) return;
+  const list = ids.map(id => byId(db[kind] || [], id)).filter(Boolean);
+  const skip = kind === 'admins' ? list.filter(a => a.id === session.id) : [];
+  let del = list.filter(m => !skip.includes(m));
+  if (kind === 'admins' && db.admins.length - del.length < 1) { toast('لا بد أن يبقى مدير واحد على الأقل'); return; }
+  if (!del.length) { toast('لا يمكنك حذف حسابك الحالي'); return; }
+  const one = KIND_ONE[kind] || 'عضو';
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal"><h2>حذف ${del.length === 1 ? '«' + esc(del[0].name) + '»' : del.length + ' ' + one}</h2>
+    ${del.length > 1 ? `<div class="note" style="max-height:140px;overflow:auto">${del.map(m => esc(m.name)).join('، ')}</div>` : ''}
+    ${skip.length ? '<p class="muted">حسابك الحالي لن يُحذف.</p>' : ''}
+    <p class="muted" style="margin-top:0">${kind === 'students' ? 'تُحذف معه سجلات الحضور والتسميع. ' : kind === 'teachers' ? 'تبقى حلقاته بلا معلم. ' : kind === 'supervisors' ? 'تبقى حلقاته بلا مشرف. ' : ''}${CLOUD ? 'ويُحذف حساب الدخول.' : ''}</p>
+    <label>كلمة مرورك للتأكيد<input name="pw" type="password" autocomplete="current-password"></label>
+    <div class="row"><button type="button" class="btn danger" data-go>حذف</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('[data-close]').onclick = () => ov.remove();
+  setTimeout(() => ov.querySelector('[name=pw]')?.focus(), 50);
+  const run = async () => {
+    const pw = ov.querySelector('[name=pw]').value;
+    if (!pw) { toast('اكتب كلمة المرور'); return; }
+    if (CLOUD) { try { await window.Cloud.testSignIn(window.Cloud.auth.email, pw); } catch (e) { toast('كلمة المرور غير صحيحة'); return; } }
+    else if (me()?.pin !== pw) { toast('كلمة المرور غير صحيحة'); return; }
+    ov.querySelector('[data-close]').disabled = true;
+    if (CLOUD) {
+      try { await window.Cloud.push(db); } catch (e) { /* يكمل */ }
+      const withLogin = del.filter(m => m.hasLogin);
+      for (let i = 0; i < withLogin.length; i += 5) {
+        await Promise.all(withLogin.slice(i, i + 5).map(m => window.Cloud.fn({ action: 'remove', member_id: m.id }).catch(() => null)));
+        if (withLogin.length > 5) toast(`حذف حسابات الدخول: ${Math.min(i + 5, withLogin.length)} من ${withLogin.length}`);
+      }
+    }
+    const gone = new Set(del.map(m => m.id));
+    db[kind] = db[kind].filter(m => !gone.has(m.id));
+    if (kind === 'teachers') db.halaqat.forEach(h => { if (gone.has(h.teacherId)) h.teacherId = ''; });
+    if (kind === 'supervisors') db.halaqat.forEach(h => { if (gone.has(h.supervisorId)) h.supervisorId = ''; });
+    if (kind === 'students') { db.records = db.records.filter(r => !gone.has(r.studentId)); db.attendance = db.attendance.filter(a => !gone.has(a.studentId)); }
+    gone.forEach(id => ui.sel.delete(id));
+    save(); ov.remove(); render(); toast(`تم حذف ${del.length === 1 ? '«' + del[0].name + '»' : del.length + ' ' + one}`);
+  };
+  const btn = ov.querySelector('[data-go]');
+  btn.onclick = () => { if (!btn.classList.contains('loading')) withBusy(btn, run()); };
+  ov.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); btn.click(); } });
+}
+
+/* ============ عين إظهار كلمة المرور ============ */
+const EYE = svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>');
+const EYE_OFF = svg('<path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7a9.6 9.6 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>');
+function eyeify() {
+  document.querySelectorAll('input[type=password]:not([data-eye])').forEach(inp => {
+    inp.dataset.eye = '1';
+    const w = document.createElement('span'); w.className = 'pwwrap';
+    inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'eye'; b.tabIndex = -1;
+    b.setAttribute('aria-label', 'إظهار كلمة المرور'); b.innerHTML = EYE; w.appendChild(b);
+  });
+}
+new MutationObserver(() => { eyeify(); addPrintButtons(); }).observe(document.body, { childList: true, subtree: true });
+document.addEventListener('click', e => {
+  const b = e.target.closest('.eye'); if (!b) return;
+  e.preventDefault();
+  const inp = b.parentNode.querySelector('input'), show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password'; b.innerHTML = show ? EYE_OFF : EYE;
+  b.setAttribute('aria-label', show ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور');
+  inp.focus();
+}, true);
+
+/* ============ طباعة جدول أو حفظه PDF مع اختيار الصفوف والأعمدة ============ */
+function addPrintButtons() {
+  document.querySelectorAll('main .tbl:not([data-pr])').forEach(t => {
+    t.dataset.pr = '1';
+    if (t.classList.contains('paytbl') || !t.querySelector('table td')) return;
+    const b = document.createElement('div'); b.className = 'tblprint noprint';
+    b.innerHTML = `<button type="button" class="btn sm" data-print title="طباعة / حفظ PDF">${svg('<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>')}<span>طباعة / PDF</span></button>`;
+    t.parentNode.insertBefore(b, t);
+  });
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-print]'); if (b) printTable(b.parentNode.nextElementSibling?.querySelector('table')); });
+function cellText(td) {
+  if (!td) return '';
+  const c = td.cloneNode(true), live = td.querySelectorAll('input,select,textarea'), cl = c.querySelectorAll('input,select,textarea');
+  cl.forEach((x, i) => { const o = live[i]; const v = o.tagName === 'SELECT' ? (o.selectedIndex > 0 || o.value ? o.options[o.selectedIndex]?.text || '' : '') : (o.type === 'checkbox' ? '' : o.value); x.replaceWith(document.createTextNode(v)); });
+  c.querySelectorAll('button:not(.lnk),.noprint,.av').forEach(x => x.remove());
+  return c.textContent.replace(/\s+/g, ' ').trim();
+}
+function tableGrid(tbl) {
+  const rows = [...tbl.rows], grid = [];
+  rows.forEach((tr, ri) => {
+    grid[ri] = grid[ri] || []; let c = 0;
+    [...tr.cells].forEach(td => {
+      while (grid[ri][c]) c++;
+      const rs = td.rowSpan || 1, cs = td.colSpan || 1;
+      for (let a = 0; a < rs; a++) for (let b = 0; b < cs; b++) { grid[ri + a] = grid[ri + a] || []; grid[ri + a][c + b] = { td, c0: c, cs, first: a === 0 && b === 0 }; }
+      c += cs;
+    });
+  });
+  let H = rows.findIndex(tr => [...tr.cells].some(x => x.tagName === 'TD')); if (H < 0) H = rows.length;
+  const ncol = Math.max(0, ...grid.map(r => r.length));
+  const labels = Array.from({ length: ncol }, (_, j) => [...new Set(grid.slice(0, H).map(r => r[j]?.td).filter(Boolean).map(cellText))].filter(Boolean).join(' – '));
+  return { rows, grid, H, ncol, labels };
+}
+function printTable(tbl) {
+  if (!tbl) return;
+  const G = tableGrid(tbl), card = tbl.closest('.card');
+  const data = G.rows.slice(G.H).map((tr, k) => ({ i: G.H + k, sum: tr.classList.contains('sum'), texts: Array.from({ length: G.ncol }, (_, j) => { const g = G.grid[G.H + k][j]; return g && g.first ? cellText(g.td) : ''; }) }));
+  const used = Array.from({ length: G.ncol }, (_, j) => data.some(r => r.texts[j]) && !G.grid[0]?.[j]?.td.classList.contains('noprint'));
+  const title0 = (card?.querySelector('h2')?.textContent || document.querySelector('.ttl')?.textContent || '').trim();
+  const wide = G.ncol > 7;
+  const rowLbl = r => r.texts.filter(Boolean).slice(0, 3).join(' · ') || '—';
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal wide prdlg"><h2>طباعة / حفظ PDF</h2>
+    <div class="two"><label>العنوان<input name="ttl" value="${esc(title0)}"></label><label>اتجاه الصفحة<select name="ori"><option value="portrait" ${wide ? '' : 'selected'}>طولي</option><option value="landscape" ${wide ? 'selected' : ''}>عرضي</option></select></label></div>
+    <div class="lbl-s">الأعمدة</div><div class="chips prcols">${G.labels.map((l, j) => (used[j] || l ? `<label class="chk prchip"><input type="checkbox" data-col="${j}" ${used[j] ? 'checked' : ''}> ${esc(l || 'عمود ' + (j + 1))}</label>` : '')).join('')}</div>
+    <div class="bar" style="margin:.4rem 0"><span class="lbl-s grow" style="margin:0">الصفوف <span class="muted" data-cnt></span></span><input type="search" data-rq placeholder="بحث في الصفوف" style="width:auto;max-width:200px"><button type="button" class="btn sm" data-all>الكل</button><button type="button" class="btn sm" data-none>لا شيء</button></div>
+    <div class="prrows">${data.map((r, k) => `<label class="chk"><input type="checkbox" data-row="${k}" checked> <span>${esc(rowLbl(r))}</span></label>`).join('')}</div>
+    <p class="muted" style="font-size:.82rem;margin:.6rem 0 0">للحفظ PDF اختر «حفظ بتنسيق PDF» في نافذة الطباعة.</p>
+    <div class="row"><button type="button" class="btn primary" data-go>طباعة / PDF</button><button type="button" class="btn" data-close>إلغاء</button></div></div>`;
+  document.body.appendChild(ov);
+  const rowsBoxes = () => [...ov.querySelectorAll('[data-row]')];
+  const count = () => { ov.querySelector('[data-cnt]').textContent = `(${rowsBoxes().filter(x => x.checked).length} من ${data.length})`; };
+  count();
+  ov.addEventListener('change', count);
+  ov.querySelector('[data-rq]').addEventListener('input', e => { const q = norm(e.target.value); rowsBoxes().forEach(x => { x.parentNode.hidden = !!q && !norm(x.parentNode.textContent).includes(q); }); });
+  ov.querySelector('[data-all]').onclick = () => { rowsBoxes().forEach(x => { if (!x.parentNode.hidden) x.checked = true; }); count(); };
+  ov.querySelector('[data-none]').onclick = () => { rowsBoxes().forEach(x => { if (!x.parentNode.hidden) x.checked = false; }); count(); };
+  ov.querySelector('[data-close]').onclick = () => ov.remove();
+  ov.querySelector('[data-go]').onclick = () => {
+    const cols = [...ov.querySelectorAll('[data-col]')].filter(x => x.checked).map(x => +x.dataset.col);
+    const pick = rowsBoxes().filter(x => x.checked).map(x => data[+x.dataset.row]);
+    if (!cols.length || !pick.length) { toast('اختر عمودًا وصفًا واحدًا على الأقل'); return; }
+    const ttl = ov.querySelector('[name=ttl]').value.trim(), ori = ov.querySelector('[name=ori]').value;
+    /* صف الإجمالي يُعاد حسابه من الصفوف المختارة فقط */
+    const toNum = t => { const x = String(t).replace(/,/g, '').trim(); return x !== '' && !isNaN(+x) ? +x : null; };
+    const items = pick.filter(r => !r.sum), partial = items.length !== data.filter(r => !r.sum).length;
+    const sumOf = j => items.reduce((a, r) => a + (toNum(r.texts[j]) || 0), 0);
+    const body = pick.map(r => {
+      let html = '';
+      cols.forEach(j => {
+        const g = G.grid[r.i][j]; if (!g) { html += '<td></td>'; return; }
+        const span = cols.filter(c => c >= g.c0 && c < g.c0 + g.cs);
+        if (span[0] !== j) return;
+        let t = cellText(g.td);
+        if (r.sum && partial && g.cs === 1 && toNum(t) !== null) t = Math.round(sumOf(j)).toLocaleString('en-US');
+        html += `<td${span.length > 1 ? ` colspan="${span.length}"` : ''}>${esc(t)}</td>`;
+      });
+      return `<tr${r.sum ? ' class="sum"' : ''}>${html}</tr>`;
+    }).join('');
+    let z = document.getElementById('printzone'); if (!z) { z = document.createElement('div'); z.id = 'printzone'; document.body.appendChild(z); }
+    z.innerHTML = `<style>@page{size:A4 ${ori};margin:10mm}</style><div class="pz-head"><img src="${logoSrc()}" alt=""><div><b>${esc(db.settings.org || '')}</b>${ttl ? `<h1>${esc(ttl)}</h1>` : ''}</div><small>${today()}</small></div>
+      <table><thead><tr>${cols.map(j => `<th>${esc(G.labels[j] || '')}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
+    ov.remove();
+    document.body.classList.add('printing');
+    const done = () => { document.body.classList.remove('printing'); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    setTimeout(() => { window.print(); setTimeout(done, 1500); }, 150);
+  };
+}
+
+/* ============ التحديث التلقائي عند توفّر نسخة جديدة ============
+   يقارن بصمة ملفات التطبيق على الخادم؛ إن تغيّرت (نُشر تحديث) يُعاد التحميل تلقائيًا
+   بعد إرسال أي تغييرات معلّقة، ولا يقاطع نافذة مفتوحة أو حقلًا قيد الكتابة. */
+const VFILES = ['./index.html', './style.css', './app.js', './app-forms.js', './app-actions.js', './payroll.js', './cloud.js'];
+let verBase = null, verBusy = false, updWait = null;
+async function verSig() {
+  const parts = await Promise.all(VFILES.map(f => fetch(f + '?v=' + Date.now(), { method: 'HEAD', cache: 'no-store' })
+    .then(r => (r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || r.headers.get('content-length') || '' : null)).catch(() => null)));
+  return parts.some(p => p === null) ? null : parts.join('|');
+}
+async function checkUpdate() {
+  if (verBusy || navigator.onLine === false || !/^https?:/.test(location.protocol)) return;
+  verBusy = true;
+  try {
+    const s = await verSig();
+    if (!s) return;
+    if (verBase === null) { verBase = s; return; }
+    if (s !== verBase) applyUpdate();
+  } finally { verBusy = false; }
+}
+async function applyUpdate() {
+  const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if (document.querySelector('.overlay') || typing || window.Cloud?.busy) { clearTimeout(updWait); updWait = setTimeout(applyUpdate, 5000); return; }
+  if (CLOUD && session && window.Cloud.pendingCount(db)) { try { await window.Cloud.push(db); } catch (e) { /* يُعاد المحاولة */ updWait = setTimeout(applyUpdate, 5000); return; } }
+  try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch (e) { /* ignore */ }
+  location.reload();
+}
+window.addEventListener('online', () => setTimeout(checkUpdate, 1500));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+setInterval(() => { if (!document.hidden) checkUpdate(); }, 5 * 60000);
+setTimeout(checkUpdate, 4000);
+
 /* مسح كل البيانات: يطلب بريد المدير وكلمة مروره (أو اسمه وكلمته في الوضع المحلي) وكتابة «مسح» للتأكيد */
 function wipeAll() {
   if (session?.role !== 'admin') { toast('غير مصرح'); return; }
@@ -777,7 +961,7 @@ if (CLOUD) {
 }
 
 /* واجهة للوحدات الإضافية (مثل المرتبات) */
-window.QL = { get db() { return db; }, get session() { return session; }, me, ICONS: TAB_ICONS, placeNames: () => (db.places || []).map(x => x.name), save, render, openForm, openInfo, ask, toast, esc, uid, today, byId, norm, empty };
+window.QL = { get db() { return db; }, get session() { return session; }, me, ICONS: TAB_ICONS, printTable: t => printTable(t), placeNames: () => (db.places || []).map(x => x.name), save, render, openForm, openInfo, ask, toast, esc, uid, today, byId, norm, empty };
 
 /* العمل بدون إنترنت: تسجيل عامل الخدمة، وشارة تظهر عند انقطاع الاتصال */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
