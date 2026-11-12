@@ -390,7 +390,6 @@ body{font-variant-numeric:lining-nums tabular-nums}
 .logout-mini:hover{background:rgba(255,255,255,.2);opacity:1}
 .logout-mini svg{width:13px;height:13px}
 .side-foot .logout-c{display:none}
-@media (min-width:861px){.shell.collapsed .side-foot .logout-c{display:inline-flex}}
 
 /* ===== نافذة تثبيت التطبيق (زجاجية) ===== */
 .overlay.install{background:rgba(10,18,35,.25)}
@@ -407,3 +406,41 @@ body{font-variant-numeric:lining-nums tabular-nums}
 .dupg{border:1px solid var(--glass-line);border-radius:12px;padding:.6rem .8rem;margin-bottom:.6rem;background:rgba(255,255,255,.45)}
 .dupi{margin:.15rem 0;padding:.25rem .3rem;border-radius:8px}
 .dupi:hover{background:rgba(255,255,255,.7)}
+
+/* ===== عين كلمة المرور ===== */
+.pwwrap{position:relative;display:block}
+.pwwrap input{padding-left:2.4rem}
+.eye{position:absolute;left:.35rem;top:50%;transform:translateY(-50%);margin-top:.1rem;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;padding:0}
+.eye:hover{background:var(--navy-l);color:var(--navy)}
+.eye svg{width:19px;height:19px}
+
+/* ===== تحديد الأعضاء ===== */
+th.selc,td.selc{width:2.2rem;text-align:center}
+.selc input{width:auto;margin:0;transform:scale(1.15);cursor:pointer}
+
+/* ===== طباعة الجداول ===== */
+.tblprint{display:flex;justify-content:flex-end;margin:-.2rem 0 .35rem}
+.tblprint .btn{display:inline-flex;align-items:center;gap:.35rem}
+.tblprint svg{width:16px;height:16px}
+.prcols{max-height:150px;overflow:auto}
+.prchip{margin:0;padding:.2rem .6rem;border:1px solid var(--glass-line);border-radius:99px;background:rgba(255,255,255,.6);font-size:.85rem}
+.prrows{max-height:260px;overflow:auto;border:1px solid var(--glass-line);border-radius:10px;padding:.3rem .6rem;background:rgba(255,255,255,.45)}
+.prrows label{margin:.1rem 0;font-size:.9rem}
+#printzone{display:none}
+@media print{
+  body.printing > *:not(#printzone){display:none!important}
+  body.printing::before{display:none}
+  body.printing #printzone{display:block}
+  #printzone{font-size:10pt;color:#000}
+  #printzone .pz-head{display:flex;align-items:center;gap:10px;border-bottom:2px solid #13294b;padding-bottom:6px;margin-bottom:8px}
+  #printzone .pz-head img{width:46px;height:46px}
+  #printzone .pz-head div{flex:1}
+  #printzone .pz-head h1{font-size:13pt;margin:2px 0 0}
+  #printzone table{width:100%;border-collapse:collapse}
+  #printzone th,#printzone td{border:1px solid #555;padding:3px 5px;text-align:right}
+  #printzone th{background:#e8ecf3!important;border-bottom:2px solid #000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #printzone tbody tr:nth-child(even) td{background:var(--stripe)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #printzone tr.sum td{font-weight:700;border-top:2px solid #000}
+  #printzone thead{display:table-header-group}
+  #printzone tr{break-inside:avoid}
+}
