@@ -22,13 +22,14 @@ const TABS = {
   admin: [['dash', 'الرئيسية'], ['members', 'الأعضاء'], ['pending', 'بيانات معلّقة'], ['teachers', 'المعلمون'], ['halaqat', 'الأماكن والحلقات'], ['absence', 'غياب المعلمين'], ['students', 'الطلاب'], ['news', 'الإعلانات'], ['payroll', 'المرتبات'], ['settings', 'الإعدادات']],
   teacher: [['att', 'الحضور'], ['mine', 'طلابي'], ['profile', 'ملفي'], ['news', 'الإعلانات']],
   supervisor: [['att', 'الحضور'], ['mine', 'الطلاب'], ['absence', 'غياب المعلمين'], ['news', 'الإعلانات']],
-  student: [['me', 'تقدمي'], ['hist', 'السجل'], ['news', 'الإعلانات']]
+  student: [['me', 'تقدمي'], ['hist', 'السجل'], ['news', 'الإعلانات']],
+  accountant: [['students', 'الطلاب'], ['fees', 'الاشتراكات'], ['notes', 'ملاحظات للإدارة'], ['news', 'الإعلانات']]
 };
 /* أنواع الحسابات: كل نوع ومجموعته في قاعدة البيانات */
-const ROLES = ['teacher', 'student', 'supervisor', 'admin'];
-const ROLE_L = { student: 'طالب', teacher: 'معلم', supervisor: 'مشرف', admin: 'مدير' };
-const COLL = { student: 'students', teacher: 'teachers', supervisor: 'supervisors', admin: 'admins' };
-const KIND_ONE = { students: 'طالب', teachers: 'معلم', supervisors: 'مشرف', admins: 'مدير' };
+const ROLES = ['teacher', 'student', 'supervisor', 'accountant', 'admin'];
+const ROLE_L = { student: 'طالب', teacher: 'معلم', supervisor: 'مشرف', accountant: 'محاسب', admin: 'مدير' };
+const COLL = { student: 'students', teacher: 'teachers', supervisor: 'supervisors', accountant: 'accountants', admin: 'admins' };
+const KIND_ONE = { students: 'طالب', teachers: 'معلم', supervisors: 'مشرف', accountants: 'محاسب', admins: 'مدير' };
 
 /* ============ ملف المعلم الداخلي ============ */
 // كل حقل: [المفتاح, العنوان, النوع, خيارات]
@@ -106,6 +107,7 @@ function migrate(d) {
   if (!CLOUD && !d.admins.length) d.admins = [{ id: uid(), name: 'المدير', pin: d.settings.adminPin || '1234' }];
   ['teachers', 'students', 'halaqat', 'attendance', 'records', 'news'].forEach(k => { if (!Array.isArray(d[k])) d[k] = []; });
   if (!Array.isArray(d.supervisors)) d.supervisors = [];
+  if (!Array.isArray(d.accountants)) d.accountants = [];
   /* حقول يضيفها الإداري من الاستيراد، وأعمدة مستوردة تنتظر الاعتماد */
   if (!d.fields || typeof d.fields !== 'object') d.fields = {};
   ['students', 'teachers'].forEach(k => { if (!Array.isArray(d.fields[k])) d.fields[k] = []; });
@@ -129,7 +131,7 @@ function migrate(d) {
   if (!Array.isArray(d.fees)) d.fees = [];
   /* الأسماء المحفوظة سابقًا تُصحَّح بالقاعدة نفسها (عبدالله ← عبد الله) */
   const fx = o => { if (o && typeof o.name === 'string') { const n = fixName(o.name); if (n !== o.name) o.name = n; } };
-  ['admins', 'supervisors', 'teachers', 'students'].forEach(k => d[k].forEach(fx));
+  ['admins', 'supervisors', 'teachers', 'students', 'accountants'].forEach(k => d[k].forEach(fx));
   if (d.payroll) { (d.payroll.employees || []).forEach(fx); (d.payroll.rows || []).forEach(fx); }
   return d;
 }
@@ -310,7 +312,11 @@ function attRate(sid) {
 }
 const hifzAyat = sid => db.records.filter(r => r.studentId === sid && r.type === 'حفظ').reduce((s, r) => s + (r.to - r.from + 1), 0);
 const newsFor = aud => db.news.filter(n => n.audience === 'all' || n.audience === aud).slice().reverse();
-const AUD = { all: 'الجميع', teacher: 'المعلمون', supervisor: 'المشرفون', student: 'الطلاب' };
+const AUD = { all: 'الجميع', teacher: 'المعلمون', supervisor: 'المشرفون', student: 'الطلاب', accountant: 'المحاسبون', admin: 'المدير' };
+/* حالة الطالب: منقطع أو منتظم (الافتراضي) */
+const stOff = st => (st?.info || {}).status === 'منقطع';
+/* ملاحظة مرسلة من أحد العاملين: يظهر اسمه كما سجّله الخادم */
+const byLine = n => (n.author ? `<b class="muted" style="display:block;font-size:.85rem">ملاحظة من ${esc(n.author)}</b>` : '');
 const opts = (arr, v = 'id', l = 'name') => arr.map(x => ({ v: x[v], l: x[l] }));
 
 /* ============ النماذج (نوافذ) ============ */
@@ -379,6 +385,7 @@ const ICONS = {
   teacher: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="7.5" r="3"/><path d="M2.5 20v-1.2a6 6 0 0 1 12 0V20"/><rect x="13.5" y="4" width="8" height="6" rx="1"/><path d="M17.5 10v3m-2 0h4"/></svg>',
   supervisor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 12l2 2 4-4"/><path d="M9 17h6"/></svg>',
   admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
+  accountant: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 11h2M11.5 11h1M14 11h2M8 14h2M11.5 14h1M14 14h2M8 17h2M11.5 17h4.5"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
 };
 /* أيقونات التبويبات في الشريط الجانبي */
@@ -520,7 +527,7 @@ function render() {
 /* ============ مكونات مشتركة ============ */
 function newsView(aud) {
   const list = newsFor(aud);
-  return `<div class="card"><h2>الإعلانات</h2>${list.length ? list.map(n => `<div class="news">${esc(n.text)}<br><small>${esc(n.date)}</small></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
+  return `<div class="card"><h2>الإعلانات</h2>${list.length ? list.map(n => `<div class="news">${byLine(n)}${esc(n.text)}<br><small>${esc(n.date)}</small></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
 }
 function halaqaPicker(list) {
   if (!list.some(h => h.id === ui.hid)) ui.hid = list[0]?.id || '';
@@ -542,7 +549,7 @@ const adminViews = {
     return `<div class="grid">${stats.map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>${newsView('admin')}`;
   },
   members() {
-    const subs = [['unclassified', 'غير مصنف'], ['teachers', 'المعلمون'], ['students', 'الطلاب'], ['supervisors', 'المشرفون'], ['admins', 'المديرون']];
+    const subs = [['unclassified', 'غير مصنف'], ['teachers', 'المعلمون'], ['students', 'الطلاب'], ['supervisors', 'المشرفون'], ['accountants', 'المحاسبون'], ['admins', 'المديرون']];
     const kind = subs.some(x => x[0] === ui.msub) ? ui.msub : 'teachers';
     /* موظفو المرتبات يظهرون هنا تلقائيًا حتى يُحدَّد تصنيف كل منهم */
     const cnt = k => (k === 'unclassified' ? unclassCount() : db[k].length);
@@ -599,11 +606,11 @@ const adminViews = {
     <select data-change="fcat"><option value="">الصغار والكبار</option>${Object.entries(CATS).map(([k, l]) => `<option value="${k}" ${ui.fcat === k ? 'selected' : ''}>${k === 'child' ? 'الصغار' : 'الكبار'}</option>`).join('')}</select>
     <select data-change="fh"><option value="">كل الحلقات</option>${db.halaqat.map(h => `<option value="${esc(h.id)}" ${h.id === ui.fh ? 'selected' : ''}>${esc(halaqaLabel(h))}</option>`).join('')}</select>
     <button class="btn primary" data-act="addStudent">+ استمارة طالب</button></div>
-    ${list.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الفئة</th><th>السن</th><th>الحلقة</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${list.map(st => `<tr><td><span class="who">${avatar(st)}<span>${esc(st.name)}</span></span></td><td><span class="tag ${st.cat === 'adult' ? 'tag-a' : ''}">${CATS[st.cat || 'child']}</span></td><td>${ageOf(st) === '' ? '—' : ageOf(st)}</td><td>${esc(hName(st.halaqaId))}</td><td>${esc(lastHifz(st.id))}</td><td>${attRate(st.id)}</td><td><button class="btn sm primary" data-act="studentCard" data-id="${st.id}">الملف</button><button class="btn sm" data-act="hist" data-id="${st.id}">السجل</button><button class="btn sm" data-act="editStudent" data-id="${st.id}">تعديل</button>${db.fields.students.length ? `<button class="btn sm" data-act="editExtra" data-k="students" data-id="${st.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delStudent" data-id="${st.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب.')}</div>`;
+    ${list.length ? `<div class="tbl"><table><tr><th>الاسم</th><th>الفئة</th><th>السن</th><th>الحلقة</th><th>آخر حفظ</th><th>الحضور</th><th></th></tr>${list.map(st => `<tr><td><span class="who">${avatar(st)}<span>${esc(st.name)}${stOff(st) ? ' <span class="tag tag-no">منقطع</span>' : ''}</span></span></td><td><span class="tag ${st.cat === 'adult' ? 'tag-a' : ''}">${CATS[st.cat || 'child']}</span></td><td>${ageOf(st) === '' ? '—' : ageOf(st)}</td><td>${esc(hName(st.halaqaId))}</td><td>${esc(lastHifz(st.id))}</td><td>${attRate(st.id)}</td><td><button class="btn sm primary" data-act="studentCard" data-id="${st.id}">الملف</button><button class="btn sm" data-act="hist" data-id="${st.id}">السجل</button><button class="btn sm" data-act="editStudent" data-id="${st.id}">تعديل</button><button class="btn sm" data-stat="${st.id}">${stOff(st) ? 'منتظم' : 'منقطع'}</button>${db.fields.students.length ? `<button class="btn sm" data-act="editExtra" data-k="students" data-id="${st.id}">إضافية</button>` : ''}<button class="btn sm danger" data-act="delStudent" data-id="${st.id}">حذف</button></td></tr>`).join('')}</table></div>` : empty('لا يوجد طلاب.')}</div>`;
   },
   news() {
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">الإعلانات</h2><button class="btn primary" data-act="addNews">+ إعلان</button></div>
-    ${db.news.length ? db.news.slice().reverse().map(n => `<div class="news">${esc(n.text)}<br><small>${esc(n.date)} — ${AUD[n.audience] || '—'}</small> <button class="btn sm danger" data-act="delNews" data-id="${n.id}">حذف</button></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
+    ${db.news.length ? db.news.slice().reverse().map(n => `<div class="news">${byLine(n)}${esc(n.text)}<br><small>${esc(n.date)} — ${AUD[n.audience] || '—'}</small> <button class="btn sm danger" data-act="delNews" data-id="${n.id}">حذف</button></div>`).join('') : empty('لا توجد إعلانات.')}</div>`;
   },
   payroll: () => window.Payroll ? window.Payroll.view() : `<div class="card">${empty('ملف المرتبات payroll.js غير محمّل.')}</div>`,
   settings() {
