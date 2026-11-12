@@ -284,9 +284,11 @@ async function push(db) {
     const role = auth.member?.role;
     const ds = diff(db);
     for (const gr of ds) {
-      for (let i = 0; i < gr.up.length; i += 500) {
-        const conflict = gr.conflict || gr.pk.join(',');
-        await req(`/rest/v1/${gr.table}?on_conflict=${conflict}`, { method: 'POST', body: gr.up.slice(i, i + 500), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      /* صف يعرفه الخادم يُحدَّث بمعرّفه (ولو تغيّر صاحبه بالدمج)، والصف الجديد بمفتاحه الطبيعي (الموظف والشهر) */
+      const prev = snap[gr.name] || {}, pk = gr.pk.join(',');
+      const parts = [[gr.up.filter(r => rowKey(gr.pk, r) in prev), pk], [gr.up.filter(r => !(rowKey(gr.pk, r) in prev)), gr.conflict || pk]];
+      for (const [list, conflict] of parts) for (let i = 0; i < list.length; i += 500) {
+        await req(`/rest/v1/${gr.table}?on_conflict=${conflict}`, { method: 'POST', body: list.slice(i, i + 500), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
       }
       gr.up.forEach(r => { snap[gr.name] = snap[gr.name] || {}; snap[gr.name][rowKey(gr.pk, r)] = JSON.stringify(r); });
     }
