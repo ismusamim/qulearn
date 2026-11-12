@@ -388,7 +388,7 @@ async function push(db) {
         }
       }
     }
-    LS.set(snapKey(), snap);
+    persist(snapKey(), snap);
     lastSync = new Date(); lastError = '';
   } catch (e) {
     lastError = e.message || String(e);
@@ -407,8 +407,45 @@ let onReject = null;
 /* ---------------- النسخة المحلية ---------------- */
 const dbKey = () => 'qcloud_db_' + (auth?.uid || 'x');
 const snapKey = () => 'qcloud_snap_' + (auth?.uid || 'x');
-function saveLocal(db) { LS.set(dbKey(), db); if (snap) LS.set(snapKey(), snap); }
+/* النسخة المحلية في «قاعدة بيانات المتصفح» (IndexedDB): سعتها مئات الميغابايت بدل 5 في التخزين العادي.
+   إن لم تتوفر (بعض المتصفحات في الوضع الخاص) يُستخدم التخزين العادي كما كان.
+   بعد أول حفظ ناجح تُحذف النسخة القديمة من التخزين العادي حتى لا تبقى نسختان متعارضتان. */
+const IDB = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((ok, no) => {
+    if (!window.indexedDB) { no(new Error('no indexedDB')); return; }
+    const r = indexedDB.open('qulearn', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  }));
+  const tx = (mode, fn) => open().then(d => new Promise((ok, no) => {
+    const t = d.transaction('kv', mode), q = fn(t.objectStore('kv'));
+    t.oncomplete = () => ok(q.result); t.onerror = t.onabort = () => no(t.error);
+  }));
+  return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)) };
+})();
+/* الكتابة بالترتيب، وكل مفتاح يُكتب بأحدث قيمة له (الضغطات المتتالية تُجمع في كتابة واحدة) */
+const pendingW = new Map(); let writing = false;
+function persist(k, v) { pendingW.set(k, v); if (!writing) flushW(); }
+async function flushW() {
+  writing = true;
+  while (pendingW.size) {
+    const [k, v] = pendingW.entries().next().value; pendingW.delete(k);
+    try { await IDB.set(k, v); LS.del(k); } catch (e) { LS.set(k, v); }
+  }
+  writing = false;
+}
+function saveLocal(db) { persist(dbKey(), db); if (snap) persist(snapKey(), snap); }
+/* قراءة فورية (للنسخ القديمة المحفوظة في التخزين العادي فقط) */
 function cached() { if (!auth) return null; snap = LS.get(snapKey()); return LS.get(dbKey()); }
+/* قراءة النسخة المحفوظة: من قاعدة بيانات المتصفح أولًا، ثم التخزين العادي */
+async function loadLocal() {
+  if (!auth) return null;
+  try { const [d, s] = await Promise.all([IDB.get(dbKey()), IDB.get(snapKey())]); if (d) { snap = s || null; return d; } } catch (e) { /* يكمل بالتخزين العادي */ }
+  return cached();
+}
+/* تكتمل قراءة النسخة المحفوظة قبل أي مزامنة، حتى لا يُستبدل ما سُجّل بدون إنترنت قبل إرساله */
+const ready = loadLocal().catch(() => null);
 async function publicSettings() {
   const rows = await req('/rest/v1/settings?select=key,value', { anon: true });
   const s = {}; (rows || []).forEach(r => { s[r.key] = r.value; }); return s;
@@ -422,7 +459,7 @@ window.Cloud = {
   get lastError() { return lastError; },
   get lastSync() { return lastSync; },
   cfg: CFG, uuid, isUuid, ensureUuids, emptyDb, snapshotOf,
-  signIn, signOut, lookup, setMember, pull, push, schedule, pendingCount, cached, saveLocal, publicSettings,
+  signIn, signOut, lookup, setMember, pull, push, schedule, pendingCount, cached, saveLocal, loadLocal, ready, publicSettings,
   provision, fn, rpc, req, selectAll,
   get lastChanged() { return lastChanged; },
   get incremental() { return inc; },
