@@ -12,6 +12,8 @@
   TABS.admin.splice(TABS.admin.findIndex(t => t[0] === 'payroll') + 1, 0, ['fees', 'الاشتراكات']);
   TAB_ICONS.fees = svg('<rect x="2" y="6" width="20" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.6"/><path d="M6 9.5v6M18 9.5v6"/>');
   adminViews.fees = () => view();
+  /* يُضاف هذا الملف لفحص التحديث التلقائي (القائمة تُعرَّف في app-actions.js الذي يُحمَّل بعده) */
+  setTimeout(() => { try { if (!VFILES.includes('./fees.js')) VFILES.push('./fees.js'); } catch (e) { /* ignore */ } }, 0);
 
   const fees = () => (Array.isArray(db.fees) ? db.fees : (db.fees = []));
   const money = n => (Math.round((+n || 0) * 100) / 100).toLocaleString('en-US');
