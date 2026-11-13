@@ -10,6 +10,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # qulearn — architecture and rules
 
+> **Start with [docs/HANDOFF.md](docs/HANDOFF.md)**: current status, where the database and hosting live,
+> open issues and decisions already made. Update it whenever you change any of those.
+
 Arabic (RTL) web app for managing Quran halaqat. Next.js 16 App Router + TypeScript (strict) + Prisma 7 / PostgreSQL + shadcn/ui (radix, Tailwind 4).
 `legacy/` holds the original vanilla-JS + Supabase app. It is the **functional specification** for the rewrite (read it for behaviour, wording and business rules); never import from it and never edit it.
 

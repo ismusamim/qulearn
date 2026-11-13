@@ -45,3 +45,6 @@ next-env.d.ts
 
 # neon cli context
 .neon
+
+# Local Netlify folder
+.netlify

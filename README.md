@@ -81,7 +81,7 @@ src/components/ui/      shadcn/ui components      src/components/shared/  app-wi
 legacy/                 the original vanilla-JS + Supabase app, kept as the functional reference
 ```
 
-The architecture rules are in [AGENTS.md](AGENTS.md).
+The architecture rules are in [AGENTS.md](AGENTS.md); project status, infrastructure and open items in [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## Moving data from the old app
 
