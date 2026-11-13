@@ -1,0 +1,797 @@
+// qulearn — Quran halaqat management.
+// Conventions: PascalCase models / camelCase fields mapped to snake_case tables and columns.
+// Date-only values use @db.Date; money and hours use Decimal.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  ADMIN
+  SUPERVISOR
+  TEACHER
+  STUDENT
+  ACCOUNTANT
+}
+
+enum PlaceType {
+  MOSQUE // مسجد
+  DAR // دار تحفيظ
+}
+
+enum ScheduleMode {
+  CLOCK // من ساعة إلى ساعة
+  PRAYER // من بعد صلاة … إلى صلاة أو ساعة
+}
+
+enum StudentCategory {
+  CHILD // صغير — له ولي أمر
+  ADULT // كبير
+}
+
+enum StudentStatus {
+  ACTIVE // منتظم
+  DROPPED // منقطع
+}
+
+enum TeacherStatus {
+  ACTIVE // نشط
+  ON_LEAVE // في إجازة
+  SUSPENDED // موقوف
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  EXCUSED
+  ABSENT
+}
+
+enum RecitationType {
+  HIFZ // حفظ
+  REVIEW // مراجعة
+  CONSOLIDATION // تثبيت
+}
+
+enum NewsAudience {
+  ALL
+  ADMIN
+  SUPERVISOR
+  TEACHER
+  STUDENT
+  ACCOUNTANT
+}
+
+enum CustomFieldKind {
+  STUDENTS
+  TEACHERS
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  TEXTAREA
+}
+
+enum EmployeeStatus {
+  ACTIVE // نشط
+  STOPPED // متوقف
+}
+
+enum AbsencePermission {
+  WITH_PERMISSION // بإذن
+  WITHOUT_PERMISSION // بغير إذن
+}
+
+enum AbsenceProof {
+  BALANCE // رصيد
+  PROVEN // مثبت
+}
+
+enum DiscountType {
+  PERCENT
+  AMOUNT
+}
+
+enum CollectionStatus {
+  DRAFT
+  SENT
+  RETURNED
+  DONE
+}
+
+enum ExamType {
+  FOLLOW_UP // متابعة — المشرف
+  PERIODIC // دوري — المعلم أو المشرف
+  MASTERY // إتقان — المشرف
+  COMPETITION // مسابقة — المشرفون والمدير
+}
+
+enum CollectionLineState {
+  PENDING
+  OK
+  ISSUE
+}
+
+// ─────────────────────── Accounts & sessions ───────────────────────
+
+/// One login account. A person holding several roles has one Member per role
+/// (same name); the UI lets them switch between them.
+model Member {
+  id             String   @id @default(uuid()) @db.Uuid
+  role           Role
+  name           String
+  /// Arabic-normalised name (see src/lib/arabic.ts) used for search and uniqueness checks.
+  nameNormalized String   @map("name_normalized")
+  phone          String   @default("")
+  /// bcrypt hash; null means the account cannot log in yet.
+  passwordHash   String?  @map("password_hash")
+  /// Small square avatar as a data URL.
+  photo          String?
+  /// Values of admin-defined custom fields, keyed by CustomField.key.
+  extra          Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  studentProfile StudentProfile?
+  teacherProfile TeacherProfile?
+  sessions       Session[]
+  permissions    MemberPermission[]
+  employee       Employee?
+
+  taughtHalaqat     Halaqa[]         @relation("HalaqaTeacher")
+  supervisedHalaqat Halaqa[]         @relation("HalaqaSupervisor")
+  attendance        Attendance[]     @relation("AttendanceStudent")
+  attendanceTaken   Attendance[]     @relation("AttendanceRecorder")
+  recitations       Recitation[]     @relation("RecitationStudent")
+  recitationsTaken  Recitation[]     @relation("RecitationRecorder")
+  news              News[]
+  feePayments       FeePayment[]     @relation("FeeStudent")
+  feesCollected     FeePayment[]     @relation("FeeCollector")
+  collections       Collection[]
+  collectionLines   CollectionLine[]
+  absencesRecorded  TeacherAbsence[]
+  exams             Exam[]           @relation("ExamStudent")
+  examsGiven        Exam[]           @relation("ExamExaminer")
+
+  /// Login, uniqueness checks and lists filter by role, then by name.
+  @@index([role, nameNormalized])
+  @@index([role, name])
+  /// Substring search («contains» → LIKE '%q%') on names; needs the pg_trgm extension.
+  @@index([nameNormalized(ops: raw("gin_trgm_ops"))], type: Gin, map: "members_name_normalized_trgm_idx")
+  @@map("members")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// SHA-256 of the opaque token stored in the cookie.
+  tokenHash String   @unique @map("token_hash")
+  memberId  String   @map("member_id") @db.Uuid
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Grantable permission for a whole role (see src/server/auth/permissions.ts for the keys).
+model RolePermission {
+  role       Role
+  permission String
+  allowed    Boolean
+
+  @@id([role, permission])
+  @@map("role_permissions")
+}
+
+/// Per-member override; wins over the role-level setting.
+model MemberPermission {
+  memberId   String  @map("member_id") @db.Uuid
+  permission String
+  allowed    Boolean
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([memberId, permission])
+  @@map("member_permissions")
+}
+
+// ─────────────────────── Profiles ───────────────────────
+
+/// Application form of a student (استمارة التقديم).
+model StudentProfile {
+  memberId   String          @id @map("member_id") @db.Uuid
+  category   StudentCategory @default(CHILD)
+  halaqaId   String?         @map("halaqa_id") @db.Uuid
+  status     StudentStatus   @default(ACTIVE)
+  statusDate DateTime?       @map("status_date") @db.Date
+
+  nationalId String?   @unique @map("national_id")
+  birthDate  DateTime? @map("birth_date") @db.Date
+  /// Adults give an age, stored as a birth year.
+  birthYear  Int?      @map("birth_year")
+  address    String    @default("")
+  phone      String    @default("")
+  whatsapp   String    @default("")
+
+  // Child
+  study                 String @default("") // عام / أزهر
+  grade                 String @default("") // الصف الدراسي وقت التقديم
+  guardianName          String @default("") @map("guardian_name")
+  guardianJob           String @default("") @map("guardian_job")
+  guardianPhone         String @default("") @map("guardian_phone")
+  guardianWhatsapp      String @default("") @map("guardian_whatsapp")
+  guardianRelation      String @default("") @map("guardian_relation") // الأب / الأم / شخص آخر
+  guardianRelationOther String @default("") @map("guardian_relation_other")
+
+  // Adult
+  maritalStatus       String @default("") @map("marital_status")
+  qualification       String @default("")
+  qualificationStatus String @default("") @map("qualification_status") // طالب / خريج
+  job                 String @default("")
+  availability        String @default("")
+
+  // Placement test
+  testReading String @default("") @map("test_reading")
+  testTajweed String @default("") @map("test_tajweed")
+  testHifz    String @default("") @map("test_hifz")
+
+  // Admin decision
+  joinDate     DateTime? @map("join_date") @db.Date
+  pledgeSigned Boolean   @default(false) @map("pledge_signed")
+
+  // Subscription: explicit amount, or category, minus discount (see src/lib/domain/fees.ts)
+  monthlyFee       Decimal?      @map("monthly_fee") @db.Decimal(12, 2)
+  feeCategoryId    String?       @map("fee_category_id") @db.Uuid
+  feeDiscountId    String?       @map("fee_discount_id") @db.Uuid
+  /// Per-student value for discounts flagged perStudent.
+  feeDiscountValue Decimal?      @map("fee_discount_value") @db.Decimal(12, 2)
+  feeDiscountType  DiscountType? @map("fee_discount_type")
+  updatedAt        DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  member      Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  halaqa      Halaqa?      @relation(fields: [halaqaId], references: [id], onDelete: SetNull)
+  feeCategory FeeCategory? @relation(fields: [feeCategoryId], references: [id], onDelete: SetNull)
+  feeDiscount FeeDiscount? @relation(fields: [feeDiscountId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  /// "Active students of this halaqa" is the most common student query.
+  @@index([halaqaId, status])
+  @@index([feeCategoryId])
+  @@index([feeDiscountId])
+  @@map("student_profiles")
+}
+
+/// Teacher's internal file: personal, administrative (admin-only) and technical sections.
+model TeacherProfile {
+  memberId String @id @map("member_id") @db.Uuid
+
+  // Personal — editable by the teacher
+  fullName         String    @default("") @map("full_name")
+  birthDate        DateTime? @map("birth_date") @db.Date
+  email            String    @default("")
+  address          String    @default("")
+  emergencyContact String    @default("") @map("emergency_contact")
+
+  // Administrative — admin only (the teacher may read)
+  employeeNo   String        @default("") @map("employee_no")
+  joinDate     DateTime?     @map("join_date") @db.Date
+  contractType String        @default("") @map("contract_type") // متطوع / متعاقد / موظف
+  status       TeacherStatus @default(ACTIVE)
+  monthlyPay   Decimal?      @map("monthly_pay") @db.Decimal(12, 2)
+  adminNote    String        @default("") @map("admin_note")
+
+  // Technical — editable by the teacher
+  qualification   String   @default("")
+  riwaya          String   @default("")
+  ijaza           String   @default("")
+  sanad           String   @default("")
+  memorizedParts  Int?     @map("memorized_parts")
+  experienceYears Int?     @map("experience_years")
+  specialty       String   @default("")
+  courses         String   @default("")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@map("teacher_profiles")
+}
+
+// ─────────────────────── Places & halaqat ───────────────────────
+
+model Place {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @unique
+  type      PlaceType @default(MOSQUE)
+  address   String    @default("")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  halaqat Halaqa[]
+
+  @@map("places")
+}
+
+/// A circle. Displayed by its teacher's name (see halaqaLabel in src/lib/domain/halaqa.ts).
+model Halaqa {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @default("")
+  teacherId    String?  @map("teacher_id") @db.Uuid
+  supervisorId String?  @map("supervisor_id") @db.Uuid
+  placeId      String?  @map("place_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  scheduleMode ScheduleMode? @map("schedule_mode")
+  /// "HH:mm" — CLOCK mode start.
+  startTime    String?       @map("start_time")
+  /// "HH:mm" — end by clock (either mode).
+  endTime      String?       @map("end_time")
+  /// PRAYER mode: starts after this prayer.
+  startPrayer  String?       @map("start_prayer")
+  /// PRAYER mode: ends at this prayer (when not ending by clock).
+  endPrayer    String?       @map("end_prayer")
+
+  teacher     Member?          @relation("HalaqaTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+  supervisor  Member?          @relation("HalaqaSupervisor", fields: [supervisorId], references: [id], onDelete: SetNull)
+  place       Place?           @relation(fields: [placeId], references: [id], onDelete: SetNull)
+  students    StudentProfile[]
+  collections Collection[]
+  exams       Exam[]
+
+  @@index([teacherId])
+  @@index([supervisorId])
+  @@index([placeId])
+  @@map("halaqat")
+}
+
+// ─────────────────────── Attendance & recitation ───────────────────────
+
+model Attendance {
+  id           String           @id @default(uuid()) @db.Uuid
+  studentId    String           @map("student_id") @db.Uuid
+  date         DateTime         @db.Date
+  status       AttendanceStatus
+  recordedById String?          @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  student    Member  @relation("AttendanceStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  recordedBy Member? @relation("AttendanceRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, date])
+  @@index([date])
+  @@map("attendance")
+}
+
+model Recitation {
+  id           String         @id @default(uuid()) @db.Uuid
+  studentId    String         @map("student_id") @db.Uuid
+  date         DateTime       @db.Date
+  type         RecitationType
+  /// 1–114
+  surah        Int            @db.SmallInt
+  fromAyah     Int            @map("from_ayah") @db.SmallInt
+  toAyah       Int            @map("to_ayah") @db.SmallInt
+  grade        String?
+  note         String         @default("")
+  recordedById String?        @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  student    Member  @relation("RecitationStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  recordedBy Member? @relation("RecitationRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  /// A student's log, newest first.
+  @@index([studentId, date(sort: Desc), createdAt(sort: Desc)])
+  /// "Last memorised position": the latest HIFZ record per student.
+  @@index([studentId, type, date(sort: Desc), createdAt(sort: Desc)])
+  /// Recent activity across all students (dashboard).
+  @@index([date(sort: Desc), createdAt(sort: Desc)])
+  @@map("recitations")
+}
+
+// ─────────────────────── News, settings, custom fields ───────────────────────
+
+/// Announcements, and notes sent to the administration (those carry an author).
+model News {
+  id          String       @id @default(uuid()) @db.Uuid
+  text        String
+  audience    NewsAudience @default(ALL)
+  date        DateTime     @default(now()) @db.Date
+  authorId    String?      @map("author_id") @db.Uuid
+  /// e.g. «المحاسب فلان» — kept as text so it survives account deletion.
+  authorLabel String?      @map("author_label")
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  author Member? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([audience, date(sort: Desc)])
+  @@index([authorId])
+  @@map("news")
+}
+
+/// Key/value application settings (typed accessors in src/server/settings.ts).
+model Setting {
+  key   String @id
+  value Json
+
+  @@map("settings")
+}
+
+model CustomField {
+  kind  CustomFieldKind
+  key   String
+  label String
+  type  CustomFieldType @default(TEXT)
+
+  @@id([kind, key])
+  @@map("custom_fields")
+}
+
+/// Imported spreadsheet column with no matching field yet, awaiting the admin's decision.
+model PendingColumn {
+  id     String          @id @default(uuid()) @db.Uuid
+  kind   CustomFieldKind
+  header String
+  /// Type the admin picked for this column, kept with the draft until approval.
+  type   CustomFieldType @default(TEXT)
+  /// Array of { memberId, name, value }.
+  values Json            @default("[]")
+  date   DateTime        @default(now()) @db.Date
+
+  @@map("pending_columns")
+}
+
+// ─────────────────────── Payroll ───────────────────────
+
+/// Singleton (id = 1): payroll calculation rules.
+model PayrollSettings {
+  id                    Int     @id @default(1)
+  /// Deduction per absent hour, with / without permission.
+  absenceWithPermission Decimal @default(20) @map("absence_with_permission") @db.Decimal(12, 2)
+  absenceNoPermission   Decimal @default(30) @map("absence_no_permission") @db.Decimal(12, 2)
+  /// Deduction per missed meeting, with / without permission.
+  meetingWithPermission Decimal @default(50) @map("meeting_with_permission") @db.Decimal(12, 2)
+  meetingNoPermission   Decimal @default(70) @map("meeting_no_permission") @db.Decimal(12, 2)
+  /// Net salary is rounded to the nearest multiple of this.
+  roundTo               Int     @default(5) @map("round_to")
+  /// Yearly leave balance for the 3-day and 6-day systems.
+  leaveDays3            Int     @default(10) @map("leave_days_3")
+  leaveDays6            Int     @default(21) @map("leave_days_6")
+  /// Default monthly base hours.
+  defaultHours          Decimal @default(26) @map("default_hours") @db.Decimal(8, 2)
+  /// Optional extra PIN protecting the payroll section.
+  pinHash               String? @map("pin_hash")
+
+  @@map("payroll_settings")
+}
+
+model Employee {
+  id         String         @id @default(uuid()) @db.Uuid
+  code       String?
+  name       String
+  /// المسمى: معلم، معلم مجيز، مساعد، مشرف، مشرف دار، مشرف عام، إداري
+  jobTitle   String?        @map("job_title")
+  /// نظام العمل: «(3) أيام» / «(6) أيام»
+  workSystem String?        @map("work_system")
+  status     EmployeeStatus @default(ACTIVE)
+  basic      Decimal?       @db.Decimal(12, 2)
+  rate       Decimal?       @db.Decimal(12, 2)
+  incentive  Decimal?       @db.Decimal(12, 2)
+  transport  Decimal?       @db.Decimal(12, 2)
+  hours      Decimal?       @db.Decimal(8, 2)
+  place      String?
+  note       String?
+  /// Linked login account, when the employee has one.
+  memberId   String?        @unique @map("member_id") @db.Uuid
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @default(now()) @updatedAt @map("updated_at")
+
+  member   Member?          @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  rows     PayrollRow[]
+  absences TeacherAbsence[]
+
+  @@map("employees")
+}
+
+/// One row per employee per month. Salary components are snapshotted so later
+/// raises never change past months.
+model PayrollRow {
+  id         String   @id @default(uuid()) @db.Uuid
+  year       Int
+  month      Int
+  employeeId String   @map("employee_id") @db.Uuid
+  name       String?
+  jobTitle   String?  @map("job_title")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  // Hours
+  baseHours              Decimal? @map("base_hours") @db.Decimal(8, 2)
+  extraHours             Decimal? @map("extra_hours") @db.Decimal(8, 2)
+  exceptionalHours       Decimal? @map("exceptional_hours") @db.Decimal(8, 2)
+  // Absence (hours) and missed meetings (count)
+  absentWithPermission   Decimal? @map("absent_with_permission") @db.Decimal(8, 2)
+  absentNoPermission     Decimal? @map("absent_no_permission") @db.Decimal(8, 2)
+  meetingsWithPermission Decimal? @map("meetings_with_permission") @db.Decimal(8, 2)
+  meetingsNoPermission   Decimal? @map("meetings_no_permission") @db.Decimal(8, 2)
+  // Deductions
+  deductionTest          Decimal? @map("deduction_test") @db.Decimal(12, 2)
+  deductionRecitation    Decimal? @map("deduction_recitation") @db.Decimal(12, 2)
+  deductionBooks         Decimal? @map("deduction_books") @db.Decimal(12, 2)
+  // Salary components (snapshot)
+  basic                  Decimal? @db.Decimal(12, 2)
+  rate                   Decimal? @db.Decimal(12, 2)
+  incentive              Decimal? @db.Decimal(12, 2)
+  transport              Decimal? @db.Decimal(12, 2)
+  note                   String   @default("")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@unique([year, month, employeeId])
+  /// An employee's history; also checked before an employee can be deleted.
+  @@index([employeeId, year, month])
+  @@map("payroll_rows")
+}
+
+/// A closed month can no longer be edited.
+model PayrollClosedMonth {
+  year  Int
+  month Int
+
+  @@id([year, month])
+  @@map("payroll_closed_months")
+}
+
+model TeacherAbsence {
+  id             String             @id @default(uuid()) @db.Uuid
+  /// Payroll month this absence is charged to.
+  year           Int
+  month          Int
+  date           DateTime           @db.Date
+  employeeId     String             @map("employee_id") @db.Uuid
+  name           String?
+  place          String?
+  permission     AbsencePermission?
+  reason         String?
+  /// Admin only.
+  proof          AbsenceProof?
+  note           String?
+  recordedById   String?            @map("recorded_by_id") @db.Uuid
+  recordedByName String?            @map("recorded_by_name")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  recordedBy Member?  @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([employeeId, date])
+  @@index([year, month])
+  @@index([recordedById])
+  @@map("teacher_absences")
+}
+
+// ─────────────────────── Fees & collections ───────────────────────
+
+model FeeCategory {
+  id         String           @id @default(uuid()) @db.Uuid
+  name       String
+  amount     Decimal          @db.Decimal(12, 2)
+  /// The category applied to students of this age group who have no explicit category.
+  defaultFor StudentCategory? @unique @map("default_for")
+  sortOrder  Int              @default(0) @map("sort_order")
+
+  students StudentProfile[]
+
+  @@map("fee_categories")
+}
+
+model FeeDiscount {
+  id         String       @id @default(uuid()) @db.Uuid
+  name       String
+  type       DiscountType @default(PERCENT)
+  value      Decimal      @default(0) @db.Decimal(12, 2)
+  /// The value is set on each student instead of here («حالات خاصة»).
+  perStudent Boolean      @default(false) @map("per_student")
+  sortOrder  Int          @default(0) @map("sort_order")
+
+  students StudentProfile[]
+
+  @@map("fee_discounts")
+}
+
+/// One payment: which student, for which month, how much, collected by whom.
+model FeePayment {
+  id              String    @id @default(uuid()) @db.Uuid
+  studentId       String    @map("student_id") @db.Uuid
+  year            Int
+  month           Int
+  amount          Decimal   @db.Decimal(12, 2)
+  date            DateTime? @db.Date
+  collectedById   String?   @map("collected_by_id") @db.Uuid
+  collectedByName String?   @map("collected_by_name")
+  note            String    @default("")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  student     Member  @relation("FeeStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  collectedBy Member? @relation("FeeCollector", fields: [collectedById], references: [id], onDelete: SetNull)
+
+  /// A student's payment history.
+  @@index([studentId, year, month])
+  /// What was paid for a month, per student.
+  @@index([year, month, studentId])
+  @@index([collectedById])
+  @@map("fee_payments")
+}
+
+/// What a teacher collected from a halaqa's students in a month, sent to the accountant for review.
+model Collection {
+  id             String           @id @default(uuid()) @db.Uuid
+  teacherId      String           @map("teacher_id") @db.Uuid
+  teacherName    String?          @map("teacher_name")
+  halaqaId       String?          @map("halaqa_id") @db.Uuid
+  year           Int
+  month          Int
+  status         CollectionStatus @default(DRAFT)
+  accountantNote String           @default("") @map("accountant_note")
+  sentAt         DateTime?        @map("sent_at")
+  reviewedAt     DateTime?        @map("reviewed_at")
+  reviewedByName String?          @map("reviewed_by_name")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at")
+
+  teacher Member           @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  halaqa  Halaqa?          @relation(fields: [halaqaId], references: [id], onDelete: SetNull)
+  lines   CollectionLine[]
+
+  @@unique([teacherId, halaqaId, year, month])
+  @@index([status, sentAt(sort: Desc)])
+  @@index([halaqaId])
+  @@map("collections")
+}
+
+model CollectionLine {
+  id             String              @id @default(uuid()) @db.Uuid
+  collectionId   String              @map("collection_id") @db.Uuid
+  studentId      String              @map("student_id") @db.Uuid
+  amount         Decimal             @default(0) @db.Decimal(12, 2)
+  note           String              @default("")
+  state          CollectionLineState @default(PENDING)
+  accountantNote String              @default("") @map("accountant_note")
+
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  student    Member     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, studentId])
+  @@index([studentId])
+  @@map("collection_lines")
+}
+
+// ─────────────────────── Exams ───────────────────────
+
+/// Singleton (id = 1): marking rules. Each question starts from `questionScore`
+/// and loses points per mistake, per prompt and per tajweed mistake.
+model ExamSettings {
+  id             Int     @id @default(1)
+  questionScore  Decimal @default(10) @map("question_score") @db.Decimal(6, 2)
+  mistakePenalty Decimal @default(1) @map("mistake_penalty") @db.Decimal(6, 2)
+  promptPenalty  Decimal @default(0.5) @map("prompt_penalty") @db.Decimal(6, 2)
+  tajweedPenalty Decimal @default(0.25) @map("tajweed_penalty") @db.Decimal(6, 2)
+  /// Minimum percentage for ممتاز / جيد جدًا / جيد / مقبول (below the last: ضعيف).
+  excellentFrom  Int     @default(90) @map("excellent_from")
+  veryGoodFrom   Int     @default(80) @map("very_good_from")
+  goodFrom       Int     @default(65) @map("good_from")
+  passFrom       Int     @default(50) @map("pass_from")
+
+  @@map("exam_settings")
+}
+
+model Competition {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  levels CompetitionLevel[]
+  exams  Exam[]
+
+  @@map("competitions")
+}
+
+model CompetitionLevel {
+  id            String @id @default(uuid()) @db.Uuid
+  competitionId String @map("competition_id") @db.Uuid
+  name          String
+  /// Range of ajza covered, 1–30.
+  fromJuz       Int    @map("from_juz")
+  toJuz         Int    @map("to_juz")
+  questionCount Int    @map("question_count")
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  exams       Exam[]
+
+  @@index([competitionId])
+  @@map("competition_levels")
+}
+
+model Exam {
+  id              String   @id @default(uuid()) @db.Uuid
+  studentId       String   @map("student_id") @db.Uuid
+  /// The student's halaqa when the exam was taken.
+  halaqaId        String?  @map("halaqa_id") @db.Uuid
+  type            ExamType
+  date            DateTime @default(now()) @db.Date
+  examinerId      String?  @map("examiner_id") @db.Uuid
+  /// Kept as text so it survives account deletion.
+  examinerName    String?  @map("examiner_name")
+  /// MASTERY: the juz examined.
+  juz             Int?
+  /// COMPETITION: which competition and level (names are snapshotted in case they are deleted).
+  competitionId   String?  @map("competition_id") @db.Uuid
+  competitionName String?  @map("competition_name")
+  levelId         String?  @map("level_id") @db.Uuid
+  levelName       String?  @map("level_name")
+  maxScore        Decimal? @map("max_score") @db.Decimal(8, 2)
+  total           Decimal? @db.Decimal(8, 2)
+  grade           String?
+  /// FOLLOW_UP notes are shown to the halaqa's teacher.
+  note            String   @default("")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  student     Member            @relation("ExamStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  examiner    Member?           @relation("ExamExaminer", fields: [examinerId], references: [id], onDelete: SetNull)
+  halaqa      Halaqa?           @relation(fields: [halaqaId], references: [id], onDelete: SetNull)
+  competition Competition?      @relation(fields: [competitionId], references: [id], onDelete: SetNull)
+  level       CompetitionLevel? @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  questions   ExamQuestion[]
+
+  @@index([examinerId])
+  @@index([studentId, date(sort: Desc)])
+  @@index([halaqaId])
+  @@index([type, date(sort: Desc)])
+  @@index([competitionId])
+  @@index([levelId])
+  @@map("exams")
+}
+
+model ExamQuestion {
+  id              String  @id @default(uuid()) @db.Uuid
+  examId          String  @map("exam_id") @db.Uuid
+  position        Int
+  /// e.g. «الجديد», «المراجعة 1».
+  label           String  @default("")
+  surah           Int     @db.SmallInt
+  fromAyah        Int     @map("from_ayah") @db.SmallInt
+  toAyah          Int     @map("to_ayah") @db.SmallInt
+  mistakes        Int     @default(0)
+  prompts         Int     @default(0)
+  tajweedMistakes Int     @default(0) @map("tajweed_mistakes")
+  score           Decimal @db.Decimal(6, 2)
+
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, position])
+  @@map("exam_questions")
+}
+
+// ─────────────────────── Security ───────────────────────
+
+/// Failed-login counter per normalised name. Kept in the database so the
+/// lockout survives restarts and holds across several server instances.
+model LoginThrottle {
+  key         String    @id
+  failures    Int       @default(0)
+  lockedUntil DateTime? @map("locked_until")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([updatedAt])
+  @@map("login_throttles")
+}

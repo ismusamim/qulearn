@@ -1,78 +1,123 @@
-# إدارة حلقات تحفيظ القرآن
+# إدارة حلقات تحفيظ القرآن — qulearn
 
-تطبيق ويب عربي (RTL) خفيف لإدارة حلقات التحفيظ، بلا اعتماديات ولا خطوة بناء (HTML + CSS + JavaScript).
+تطبيق ويب عربي (RTL) لإدارة حلقات التحفيظ: الأعضاء والحلقات، الحضور والتسميع، الاختبارات، الاشتراكات وتحصيل المعلمين، المرتبات وغياب المعلمين، الإعلانات والصلاحيات.
 
-## الواجهة
+## Stack
 
-شاشة افتتاحية بالشعار وشريط تقدم ذهبي (3 ثوانٍ)، ثم صفحة دخول موحّدة للجميع: **الاسم وكلمة المرور**. لتغيير الشعار استبدل الملف `logo.png`.
-
-**الدخول الموحّد**: يكتب المستخدم بعض حروف اسمه ويختاره من القائمة، فيظهر نوع حسابه (معلم / طالب / مشرف / إداري) ومربعات للقراءة فقط تؤكد هويته (للطالب: الحلقة والمكان، وللمعلم والمشرف: حلقاته وعدد طلابها). إذا تكرر الاسم نفسه في أكثر من نوع (معلم وطالب مثلًا) تظهر أزرار لتبديل الوضع قبل الدخول، وزر «تبديل الوضع» داخل التطبيق بعده (يطلب كلمة مرور الحساب الآخر إن اختلفت).
-
-**الهيكل**: شريط جانبي عمودي على اليمين بأيقونات، يُطوى ويُفرد بانسيابية ويتغيّر اتساعه بالسحب (ويتذكر الجهاز الاختيار)، ويصبح درجًا منزلقًا على الجوال. واجهة زجاجية بخلفية من ألوان الشعار.
-
-## العمل بدون إنترنت
-
-التطبيق تطبيق ويب تقدّمي (PWA): عند أول فتح مع الإنترنت يحفظ عامل الخدمة (`sw.js`) ملفاته على الجهاز، فيفتح بعدها ويعمل كاملًا بدون اتصال، وتظهر شارة «بدون إنترنت». البيانات أصلًا محفوظة على الجهاز. التحديثات تصل تلقائيًا عند عودة الاتصال (الشبكة أولًا ثم النسخة المحفوظة). ويمكن «تثبيته» على الجوال أو الكمبيوتر من قائمة المتصفح (إضافة إلى الشاشة الرئيسية) بفضل `manifest.webmanifest`. الاستيراد من رابط Google Sheets وحده يحتاج إنترنت.
-
-## الأقسام
-
-**الإداريات**: لوحة إحصائيات، إدارة المعلمين والحلقات والطلاب، الإعلانات، نسخ احتياطي واستيراد/تصدير JSON.
-
-**إدارة الأعضاء** (تبويب «الأعضاء»): أقسام للمعلمين والطلاب والمشرفين والإداريين، كل عضو باسمه وكلمة مرور تُنشأ تلقائيًا (6 أرقام) مع إظهار/إخفاء ونسخ وإنشاء كلمة جديدة وتعديل الاسم وحذف.
-
-**المعلم**: تسجيل الحضور (حاضر/متأخر/معتذر/غائب) بالتاريخ، تسجيل التسميع (حفظ/مراجعة/تثبيت) بالسورة والآيات والتقدير والملاحظة، عرض سجل كل طالب.
-
-**ملف المعلم الداخلي** (تبويب «ملفي»): بيانات شخصية، وبيانات إدارية (للاطلاع فقط، وتعدّلها الإدارة)، وبيانات فنية (المؤهل، الرواية، الإجازة والسند، الأجزاء المحفوظة، الخبرة، الدورات). والإدارة تعدّل الأقسام الثلاثة من قسم «المعلمون».
-
-**الاستيراد الذكي** (تبويب «الأعضاء» ← استيراد): كل عمود في الملف يُطابَق مع نظيره في النظام (الحلقة، الجوال، كلمة المرور، وبيانات ملف المعلم مثل المؤهل وتاريخ الميلاد والبريد…) ويُستورد في مكانه مباشرة. الأعمدة التي ليس لها نظير تُحفظ في تبويب «بيانات معلّقة»، وبجانب كل عمود: تعديل اسمه ونوعه وقيمه، ثم «اعتماد» لإنشاء حقل جديد له (أو ربطه بحقل موجود)، أو «حذف». الحقول المعتمدة تظهر في «بيانات إضافية» لكل عضو، وتُطابَق تلقائيًا في الاستيرادات اللاحقة.
-
-**المرتبات** (تبويب «المرتبات» للإداري فقط، ويمكن حمايته برمز خاص): كل الشهور والسنوات في سجل حركة واحد بدل ورقة لكل شهر. «كشف الشهر» يُختار بالسنة والشهر، و«إنشاء الشهر» يجهّز صفًا لكل موظف نشط بأسعاره الحالية وينقل الساعات الإضافية من الشهر السابق، والراتب يُحسب فورًا عند تعديل أي خلية (نفس معادلات ملف الرواتب: خصم 20/30 للساعة و50/70 للاجتماع والتقريب لأقرب 5). عناصر الراتب تُحفظ في صف كل شهر فلا تتأثر الشهور السابقة بالزيادات، و«إغلاق الشهر» يمنع التعديل. وفيه أيضًا: ملخص السنة، وأرشيف السنوات، وسجل غياب المعلمين ورصيد الإجازات، وقواعد الحساب قابلة للتعديل. الكود في `payroll.js`.
-
-**الأماكن والحلقات**: المكان (مسجد أو دار تحفيظ) يضم حلقة أو أكثر، والحلقة تُسمّى باسم معلمها تلقائيًا وفيها طلابها. وقت الحلقة إما بالساعة (من… إلى…) أو بالصلوات (من بعد صلاة… إلى صلاة… أو إلى ساعة).
-
-**استمارة الطالب**: على غرار استمارة التقديم الورقية، بنوعين: **صغير** (تاريخ الميلاد، الدراسة عام/أزهر والصف، وبيانات ولي الأمر وصلة القرابة) و**كبير** (السن، المؤهل طالب/خريج، الحالة الاجتماعية، الوظيفة، الوقت المتاح). ومشترك: الصورة، العنوان، الهاتف وواتساب، اختبار تحديد المستوى (قراءة/تجويد/حفظ)، وقرار الإدارة (الحلقة، تاريخ التحرير، الاشتراك الشهري، التوقيع على التنبيهات). مع «ملف الطالب» للعرض والطباعة. أرقام الهاتف تُصحَّح تلقائيًا (الأرقام العربية والصفر الأول).
-
-**غياب المعلمين** (للإداري والمشرف): نموذج على غرار نموذج Google: اسم المعلم، اليوم، مكان الحلقة، الإذن، السبب (مع «أخرى»)، ملاحظات، وشهر المرتب والإثبات للإدارة؛ مع سجل شهري وملخص لكل معلم، ويغذّي رصيد الإجازات في المرتبات.
-
-**المشرف**: تُسند له حلقات محددة (من تبويب «الحلقات» ← تعديل ← المشرف)، فيسجّل حضورها وتسميعها ويطّلع على سجل طلابها.
-
-**الطالب**: آخر موضع حفظ، عدد الآيات المسجلة، نسبة الحضور، سجل التسميع الكامل، الإعلانات.
-
-## بيانات الدخول التجريبية
-
-| الاسم | الرمز |
+| Layer | Technology |
 |---|---|
-| المدير (إداري) | `1234` |
-| الشيخ أحمد (معلم) | `0000` |
-| المشرف خالد (مشرف) | `0000` |
-| عبد الله / محمد / يوسف (طلاب) | `0000` |
+| Framework | Next.js 16 (App Router, Server Components, Server Actions) + React 19 |
+| Language | TypeScript (strict) |
+| Database | PostgreSQL 17 on [Neon](https://neon.com) (Frankfurt) + Prisma ORM 7; Docker Postgres for offline work |
+| UI | shadcn/ui (Radix) + Tailwind CSS 4, RTL |
+| Validation | Zod 4 + react-hook-form |
+| Auth | Name + password, bcrypt hashes, database-backed sessions in an httpOnly cookie |
+| Tests | Vitest |
 
-غيّر الرموز من تبويب «الأعضاء» بعد أول دخول. البيانات القديمة تُرقّى تلقائيًا: الرمز الإداري السابق يصبح حساب «المدير».
+## Getting started
 
-## التشغيل محليًا
+Requires Node.js 20.19+.
 
-افتح `index.html` مباشرة في المتصفح، أو شغّل خادمًا بسيطًا: `python3 -m http.server 8000`
+### With the Neon database (default)
 
-## الرفع على GitHub
+The database is the Neon project **qulearn** (`lingering-boat-23811932`, branch `main`, region `aws-eu-central-1`).
+With the Neon CLI logged in, `neon env pull` writes both connection strings into `.env`:
 
 ```bash
-git init
-git add .
-git commit -m "Initial commit: Quran halaqat manager"
-git branch -M main
-git remote add origin https://github.com/<USERNAME>/<REPO>.git
-git push -u origin main
+npm install                                        # also generates the Prisma client
+neon env pull -e DATABASE_URL,DATABASE_URL_UNPOOLED --file .env
+npm run dev                                        # http://localhost:3000
 ```
 
-## النشر على Vercel
+`DATABASE_URL` is the **pooled** string (host ends in `-pooler`), used by the app.
+`DATABASE_URL_UNPOOLED` is the **direct** string, used by Prisma Migrate, which cannot run through the pooler
+([prisma.config.ts](prisma.config.ts)). Use `sslmode=verify-full` in both.
 
-1. ادخل إلى vercel.com ثم **Add New → Project**.
-2. اختر مستودع GitHub.
-3. اترك **Framework Preset = Other**، وبلا Build Command ولا Output Directory.
-4. اضغط **Deploy**. كل `git push` بعدها ينشر تلقائيًا.
+### With a local Docker database (offline)
 
-## تنبيه مهم
+```bash
+cp .env.example .env     # both URLs point at the container
+npm run db:up            # start PostgreSQL in Docker (port 55470)
+npm run db:migrate       # create the tables
+npm run db:seed          # demo accounts and data
+npm run dev
+```
 
-البيانات تُخزَّن في `localStorage` في متصفح كل جهاز، أي أنها **غير مشتركة بين الأجهزة**، والرموز السرية ليست حماية حقيقية. هذا مناسب للتجربة أو لجهاز إدارة واحد مع نسخ احتياطي دوري.
+Demo accounts after seeding — both databases are seeded. **Change these passwords (or delete the demo accounts) from «الأعضاء» before real data goes in:**
 
-للاستخدام الفعلي متعدد الأجهزة — وخاصة مع بيانات المرتبات — الخطوة التالية هي ربط قاعدة بيانات وتسجيل دخول حقيقي (مثل Supabase أو Firebase) واستبدال دوال `load` و`save` في `app.js`.
+| الاسم | النوع | كلمة المرور |
+|---|---|---|
+| المدير | مدير | `1234` |
+| الشيخ أحمد | معلم | `0000` |
+| المشرف خالد | مشرف | `0000` |
+| المحاسب سعيد | محاسب | `0000` |
+| عبد الله / محمد / يوسف | طلاب | `0000` |
+
+The administrator is never suggested on the login page: type the full name «المدير».
+
+## Scripts
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` / `build` / `start` | Development server / production build / run the build |
+| `npm run typecheck` · `npm run lint` · `npm test` | Static checks and unit tests |
+| `npm run db:up` | Start the local PostgreSQL container |
+| `npm run db:migrate` | Development: create a migration from schema changes and apply it |
+| `npm run db:deploy` | Apply pending migrations only (production / Neon `main`) |
+| `npm run db:seed` | Insert demo data into an empty database |
+| `npm run db:studio` | Browse the data with Prisma Studio |
+
+## Project structure
+
+```
+prisma/                 schema.prisma, migrations, seed
+src/app/                routes — thin pages that guard, call a service and render
+src/features/<name>/    one folder per business area: schemas.ts (Zod), service.ts (rules,
+                        authorisation, data access), actions.ts (server actions), components/
+src/lib/                pure helpers shared by client and server (Arabic text, dates, permissions,
+                        navigation, domain calculations)
+src/server/             server-only infrastructure: Prisma client, sessions, guards, action runner
+src/components/ui/      shadcn/ui components      src/components/shared/  app-wide building blocks
+legacy/                 the original vanilla-JS + Supabase app, kept as the functional reference
+```
+
+The architecture rules are in [AGENTS.md](AGENTS.md).
+
+## Moving data from the old app
+
+1. **Before** the new app replaces the old one on the live domain, open the old app as administrator and export its
+   JSON backup (the old app is unreachable once the domain points at the new one).
+2. Sign in to the new app as the administrator → «الاستيراد والبيانات» → «نسخة احتياطية» → import the file.
+   Passwords are hashed during the import.
+3. Vercel refuses uploads over 4.5 MB. For a larger backup (many photos), run the app locally against the same
+   database — `npm run build && npm start` with the Neon `.env` — and import at http://localhost:3000.
+
+## Deployment (Vercel)
+
+Project settings:
+
+| Setting | Value |
+|---|---|
+| Framework Preset | **Next.js** (the old app used «Other») |
+| Build / Output / Install commands | defaults (leave empty) |
+| Node.js version | 22.x or 24.x |
+| Environment variables | `DATABASE_URL` (Neon **pooled**) and `DATABASE_URL_UNPOOLED` (Neon **direct**) |
+
+Migrations are not run by the build (preview deployments share the database). Apply them once per release
+from a machine with the direct URL: `npm run db:deploy`.
+
+The old app's offline service worker is retired automatically by [public/sw.js](public/sw.js) the next time each
+browser visits; keep that file for a few months.
+
+## Database design notes
+
+- **Indexes** follow the real query patterns (see the comments in [prisma/schema.prisma](prisma/schema.prisma)), including a
+  trigram (`pg_trgm`) index for substring name search.
+- **CHECK constraints** (months 1–12, surah 1–114, ayah ranges, juz 1–30, non-negative money, percentages ≤ 100) are
+  added in raw SQL in the `db_optimizations` migration, because Prisma cannot model them. They mirror the Zod rules.
+- **Timestamps**: mutable business tables carry `created_at` / `updated_at`.
+- **Housekeeping**: expired sessions are deleted on each login; failed-login lockouts live in `login_throttles`.
+- **Schema changes on Neon**: test a migration on a branch first —
+  `neon branches create --name migration-test`, point `DATABASE_URL_UNPOOLED` at it, run `npm run db:deploy`,
+  then apply to `main`.
+
