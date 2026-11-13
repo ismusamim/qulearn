@@ -1,15 +1,16 @@
 'use strict';
 /* ============ قسم الأعضاء والجداول ============
-   - قسم الأعضاء: الفئات في قائمة منسدلة (ومعها «مصنفون بمسميات أخرى»)، وأزرار الشريط أيقونات فقط،
-     وعرض كل عمود على قدر أطول نص فيه بلا التفاف، ورؤوس الأعمدة في الوسط، و«متاح» بدل «له حساب دخول».
+   - قسم الأعضاء: الفئات في قائمة منسدلة (ومعها «مصنفون بمسميات أخرى»)، وأزرار الشريط أيقونات فقط، و«متاح» بدل «له حساب دخول».
+   - كل الجداول (عدا كشوف المرتبات): عرض كل عمود على قدر أطول نص فيه بلا التفاف، ورؤوس الأعمدة في الوسط.
    - كل جداول التطبيق: تحديد الخلايا بالسحب (أو Shift+نقر)، وتحديد عمود كامل بالنقر على رأسه،
      ثم النسخ (Ctrl+C) واللصق في Word أو Excel كجدول. */
 (() => {
   const style = document.createElement('style');
   style.textContent = `
-    .memview .tbl table{width:max-content}
-    .memview .tbl th,.memview .tbl td{white-space:nowrap}
-    .memview .tbl th{text-align:center}
+    /* كل جداول التطبيق (عدا كشوف المرتبات ذات التنسيق الخاص): عرض كل عمود على قدر أطول نص فيه، ورؤوس الأعمدة في الوسط */
+    main .tbl:not(.paytbl) table{width:max-content}
+    main .tbl:not(.paytbl) th,main .tbl:not(.paytbl) td{white-space:nowrap}
+    main .tbl:not(.paytbl) th{text-align:center}
     .msubsel{width:auto;min-width:13rem;font-weight:700}
     .btn.icon-only .cnt{font-size:.72rem;font-weight:700;margin-inline-start:.1rem}
     .btn.icon-only:has(.cnt){width:auto;padding:0 .5rem;gap:.1rem}
