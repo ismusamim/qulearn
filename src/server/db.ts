@@ -13,8 +13,10 @@ import { PrismaClient } from "@/generated/prisma/client";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 function createClient(): PrismaClient {
+  // Read lazily by the pool: importing this module must not require the
+  // variable (e.g. during `next build`); a missing URL fails on first query.
   const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error("DATABASE_URL is not set");
+  if (!connectionString) console.warn("[db] DATABASE_URL is not set; database queries will fail");
   // DATABASE_URL is Neon's pooled (PgBouncer) endpoint, so a small per-instance
   // pool is enough; idle connections are closed quickly so the compute can
   // scale to zero.

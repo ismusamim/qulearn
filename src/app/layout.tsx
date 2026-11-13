@@ -9,6 +9,10 @@ import { getBranding } from "@/server/settings";
 
 import "./globals.css";
 
+// Every page reads the branding (and usually the session) from the database,
+// so nothing is prerendered at build time — the build never needs the database.
+export const dynamic = "force-dynamic";
+
 const cairo = Cairo({ subsets: ["arabic", "latin"], variable: "--font-sans", display: "swap" });
 
 export async function generateMetadata(): Promise<Metadata> {
