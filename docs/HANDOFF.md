@@ -10,7 +10,7 @@ the next person needs, update the relevant section in the same commit.
 > This repository is **public**. Never commit connection strings, passwords, tokens or `.env`.
 > Credentials live in the local `.env` (gitignored) and in the hosting provider's settings.
 
-_Last updated: 2026-11-13._
+_Last updated: 2026-11-14._
 
 ## 1. What this is
 
@@ -26,8 +26,9 @@ TypeScript + Prisma/PostgreSQL + shadcn/ui. Arabic, RTL. Every legacy section ha
 |---|---|---|
 | Database | **Neon**, project `qulearn` (id `lingering-boat-23811932`), branch `main`, region `aws-eu-central-1` (Frankfurt), Postgres 17 | Holds the schema (3 migrations) and the demo seed only. No real data yet. |
 | Local database | Docker container `qulearn-db` on port 55470 (`docker-compose.yml`) | For offline work; same schema. |
-| Hosting (current choice) | **Netlify**, site `qulearn-halaqat` → https://qulearn-halaqat.netlify.app, team `salah-nb-03` (free plan) | Deployed from a laptop with the Netlify CLI (`npx netlify-cli deploy --build --prod`). Not connected to GitHub yet (see §5). |
-| Hosting (old) | **Vercel**, project `qulearn` in the repo owner's team `zoha17` | Serves the old app on the live domain. Its settings were switched to Next.js and both DB variables were added; the `rewrite/next-prisma` preview builds successfully there. |
+| Hosting (chosen) | **Vercel**, project `qulearn` in the repo owner's team `zoha17`; production domain `qurlearn.vercel.app` (still the old app) | Connected to GitHub: every push builds. Framework preset **Next.js**, Node 26.x. `DATABASE_URL` and `DATABASE_URL_UNPOOLED` are set for Production, Preview and Development. Branch previews: `https://qulearn-git-<branch>-zoha17.vercel.app`. Vercel Authentication on previews is turned off. |
+| Vercel CLI access to `zoha17` | On the developer's laptop, a separate login: `vercel … --global-config ~/.vercel-zoha --scope zoha17` (approved by the owner via device login) | Lets an agent read logs, manage env vars and redeploy. Revocable by the owner at vercel.com/account/settings/tokens. |
+| Netlify (abandoned) | site `qulearn-halaqat` → https://qulearn-halaqat.netlify.app, team `salah-nb-03` | Works from abroad but is **unreachable from the developer's network in Egypt**, and the free plan runs functions in Ohio (far from the Frankfurt DB). Not used. Safe to delete. |
 | Vercel (developer's account) | team `salaheldins-projects` | **Blocked by Vercel for exceeding fair-use limits** — cannot create projects. Do not use. |
 
 Environment variables (both required, everywhere the app runs):
@@ -59,7 +60,7 @@ screens, settings and permissions editing. Click through these before go-live.
 
 ## 4. Go-live checklist (in this order)
 
-1. Test the deployed site (Netlify URL above) — the unverified sections in §3.
+1. Test the Vercel preview of `rewrite/next-prisma` — especially the unverified sections in §3.
 2. **Before the live domain switches**, the administrator exports the JSON backup from the **old** app.
    After the switch the old app is gone and its data can only come from that file (or Supabase).
 3. Import it in the new app: «الاستيراد والبيانات» → «نسخة احتياطية». Hosted uploads are capped at
@@ -70,18 +71,12 @@ screens, settings and permissions editing. Click through these before go-live.
 
 ## 5. Open decisions and known issues
 
-- **Netlify is unreachable from the developer's network in Egypt.** The site's address
-  (`63.176.8.218`, also its IPv6) refuses TCP connections from there, while other Netlify addresses work.
-  From outside (check-host.net, 2026-11-13) it loads with HTTP 200 from Europe, Russia, Turkey and Israel;
-  only Iran was blocked. **Check from Egyptian mobile networks / other ISPs before choosing Netlify**: if
-  users in Egypt cannot reach it, Netlify is not an option.
-- **Hosting region.** The Netlify site's functions run in US East (Ohio) (`functions_region: us-east-2`);
-  changing it via the API returned 422 on the free plan. The database is in Frankfurt, so every query
-  crosses the Atlantic: the login page takes about 1.2–1.5 s from Europe even when warm, and pages behind
-  login (more queries) are slower. Options: move the Neon project to `aws-us-east-2` (cheap now — no real
-  data), use a paid Netlify plan that allows a region change, or host in Europe (e.g. Railway).
-- **Repository access.** Auto-deploy on push needs the host's GitHub app installed on the repo owner's
-  account (`ismusamim`), or the repo transferred / forked to the developer's account (`salah55s`).
+- **Hosting history.** Netlify was tried and dropped (unreachable from Egypt, functions in Ohio).
+  The developer's own Vercel team is blocked for fair use. Vercel `zoha17` is the host.
+- **Vercel region.** `vercel.json` pins functions to Frankfurt (`fra1`), next to the Neon database.
+  The project default was `iad1` (Washington). Keep the two in the same region.
+- **Pushing to `main` before the merge breaks deploys.** The Vercel project is now set to Next.js, so a
+  build of the old app on `main` fails (the live site keeps its last good version). Merge the rewrite first.
 - **Git push from the developer's laptop:** HTTPS has no stored credentials and the SSH key is not
   registered on GitHub. Push with the GitHub CLI login without changing git config:
   `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push`.
