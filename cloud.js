@@ -136,7 +136,7 @@ function groups(db) {
   const g = [];
   const add = (name, table, pk, rows, conflict) => g.push({ name, table, pk, rows, conflict });
   /* priv_*: إعدادات خاصة بالمدير (مثل فئات الاشتراكات وخصوماتها) لا يقرؤها غيره على الخادم */
-  add('settings', 'settings', ['key'], ['org', 'theme', 'logo', 'block_msgs', 'priv_fees', 'priv_perms'].filter(k => db.settings?.[k] !== undefined).map(k => ({ key: k, value: db.settings[k] ?? null })));
+  add('settings', 'settings', ['key'], ['org', 'theme', 'logo', 'block_msgs', 'col_labels', 'priv_fees', 'priv_perms'].filter(k => db.settings?.[k] !== undefined).map(k => ({ key: k, value: db.settings[k] ?? null })));
   add('places', 'places', ['id'], (db.places || []).map(p => ({ id: p.id, name: p.name, type: p.type || 'مسجد', address: p.address || '' })));
   add('staff', 'members', ['id'], ['admin', 'supervisor', 'teacher', 'accountant'].flatMap(r => (db[ROLE_COLL[r]] || []).map(m => memberRow(m, r))));
   add('halaqat', 'halaqat', ['id'], (db.halaqat || []).map(h => ({ id: h.id, name: h.name || '', teacher_id: nz(h.teacherId), supervisor_id: nz(h.supervisorId), place_id: nz(h.placeId), time: h.time || null })));
@@ -212,7 +212,7 @@ function emptyDb() {
 const SYNC_TABLES = {
   settings: ['key'], places: ['id'], members: ['id'], member_admin: ['member_id'], halaqat: ['id'], attendance: ['id'],
   records: ['id'], news: ['id'], custom_fields: ['kind', 'key'], pay_settings: ['id'], pay_employees: ['id'],
-  pay_rows: ['id'], pay_closed: ['y', 'm'], absences: ['id'], pending_columns: ['id'], fees: ['id']
+  pay_rows: ['id'], pay_closed: ['y', 'm'], absences: ['id'], pending_columns: ['id'], fees: ['id'], collections: ['id']
 };
 let feesOk = null; // هل جدول الاشتراكات موجود على الخادم؟
 const MEMBER_COLS = 'id,user_id,login_email,role,name,phone,halaqa_id,cat,info,extra,has_photo';
@@ -224,10 +224,11 @@ const hashStr = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h 
 const pkOf = (t, r) => SYNC_TABLES[t].map(k => r[k]).join('|');
 function tablesFor(role) {
   /* المحاسب: الطلاب والحلقات والأماكن والاشتراكات والإعلانات فقط */
-  if (role === 'accountant') return ['settings', 'places', 'members', 'halaqat', 'news', 'fees'];
+  if (role === 'accountant') return ['settings', 'places', 'members', 'halaqat', 'news', 'fees', 'collections'];
   const t = ['settings', 'places', 'members', 'member_admin', 'halaqat', 'attendance', 'records', 'news', 'custom_fields'];
-  if (role === 'admin') t.push('pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns', 'fees');
+  if (role === 'admin') t.push('pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns', 'fees', 'collections');
   else if (role === 'supervisor') t.push('absences');
+  else if (role === 'teacher') t.push('collections');
   return t;
 }
 function notePhoto(r, incremental) {
@@ -250,7 +251,9 @@ async function fetchTables(tables, filter = '', chk = null) {
   const got = await Promise.all(tables.map(t => {
     const p = selectAll(t, SYNC_TABLES[t].join(','), filter + scopeFilter(t, chk), t === 'members' && inc ? MEMBER_COLS : '*');
     /* جدول الاشتراكات قد لا يكون أُنشئ بعد: لا يعطّل ذلك بقية المزامنة */
-    return t === 'fees' ? p.then(r => { feesOk = true; return r; }, () => { feesOk = false; return []; }) : p;
+    if (t === 'fees') return p.then(r => { feesOk = true; return r; }, () => { feesOk = false; return []; });
+    /* قوائم تحصيل المعلمين: قبل تنفيذ collections.sql لا يوجد الجدول، فتبقى فارغة دون تعطيل المزامنة */
+    return t === 'collections' ? p.catch(() => []) : p;
   }));
   return Object.fromEntries(tables.map((t, i) => [t, got[i]]));
 }
@@ -303,8 +306,10 @@ async function pull() {
   db.halaqat = halaqat.map(h => ({ id: h.id, name: h.name || '', teacherId: h.teacher_id || '', supervisorId: h.supervisor_id || '', placeId: h.place_id || '', time: h.time || undefined }));
   db.attendance = attendance.map(a => ({ id: a.id, studentId: a.student_id, date: a.date, status: a.status }));
   db.records = records.map(r => ({ id: r.id, studentId: r.student_id, date: r.date, type: r.type, surah: r.surah, from: r.from_ayah, to: r.to_ayah, grade: r.grade || '', note: r.note || '' }));
-  db.news = news.map(n => ({ id: n.id, text: n.text, audience: n.audience, date: n.date, author: n.author || '', authorId: n.author_id || '' }));
+  /* الإعلانات بترتيب إنشائها (الأقدم أولًا، وتعرضها الواجهة معكوسة فيظهر الأحدث أولًا) */
+  db.news = news.slice().sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || ''))).map(n => ({ id: n.id, text: n.text, audience: n.audience, date: n.date, author: n.author || '', authorId: n.author_id || '' }));
   fields.forEach(f => { (db.fields[f.kind] = db.fields[f.kind] || []).push({ key: f.key, label: f.label, type: f.type }); });
+  db.collections = rows('collections').map(c => ({ id: c.id, teacherId: c.teacher_id, teacherName: c.teacher_name || '', halaqaId: c.halaqa_id || '', y: c.y, m: c.m, status: c.status, lines: c.lines || [], accNote: c.acc_note || '', sentAt: c.sent_at || '', reviewedBy: c.reviewed_by || '' }));
   if (role === 'admin') {
     const [ps, emps, prow, closed, abs, pend] = ['pay_settings', 'pay_employees', 'pay_rows', 'pay_closed', 'absences', 'pending_columns'].map(rows);
     db.pending = pend.map(p => ({ id: p.id, kind: p.kind, header: p.header, values: p.values || [], date: p.date }));
