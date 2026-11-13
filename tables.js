@@ -14,7 +14,10 @@
     .btn.icon-only .cnt{font-size:.72rem;font-weight:700;margin-inline-start:.1rem}
     .btn.icon-only:has(.cnt){width:auto;padding:0 .5rem;gap:.1rem}
     main .tbl td.csel,main .tbl th.csel{background:var(--gold-l) !important;box-shadow:inset 0 0 0 1px var(--gold)}
-    main .tbl.cselecting{user-select:none;-webkit-user-select:none}`;
+    main .tbl.cselecting{user-select:none;-webkit-user-select:none}
+    /* حدّ خفيف حول كل المستطيلات البيضاء (الخانات والقوائم والأزرار) حتى تظهر على الخلفية الفاتحة */
+    select,input,textarea,.btn:not(.primary):not(.danger),.results{border-color:rgba(19,41,75,.2);border-color:color-mix(in srgb,var(--navy) 20%,transparent)}
+    select:focus,input:focus,textarea:focus{border-color:var(--gold)}`;
   document.head.appendChild(style);
   setTimeout(() => { try { if (!VFILES.includes('./tables.js')) VFILES.push('./tables.js'); } catch (e) { /* ignore */ } }, 0);
 
