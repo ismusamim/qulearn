@@ -62,6 +62,8 @@ function defaults() {
 const ySel = () => `<select data-pay="y" aria-label="السنة">${years().map(y => `<option value="${y}" ${y === st.y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
 const mSel = (all) => `<select data-pay="${all ? 'am' : 'm'}" aria-label="الشهر">${all ? `<option value="0" ${!st.am ? 'selected' : ''}>كل الشهور</option>` : ''}${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === (all ? st.am : st.m) ? 'selected' : ''}>شهر (${m})</option>`).join('')}</select>`;
 
+/* حالة الموظف: «عامل» أو «متوقف» (بدل الحذف). المتوقف يخرج من كشف الشهر المفتوح، ويُعاد من «المعلمون ← المتوقفون» */
+const statSel = eid => { const off = emp(eid)?.status === 'متوقف'; return `<select class="mini" data-pstat="${Q().esc(eid)}" aria-label="حالة الموظف"><option value="on" ${off ? '' : 'selected'}>عامل</option><option value="off" ${off ? 'selected' : ''}>متوقف</option></select>`; };
 /* ============ الواجهات ============ */
 const V = {
   month() {
@@ -76,7 +78,7 @@ const V = {
     const g2 = IN.map(([, l]) => `<th>${l}</th>`).join('');
     const tr = rows.map((r, i) => {
       const c = calc(r);
-      return `<tr data-row="${esc(r.id)}"><td>${i + 1}</td><td class="nm">${esc(r.name)}</td><td>${esc(r.role || '')}</td>${IN.map(([f]) => `<td>${closed ? fmt(r[f]) : `<input class="num" type="number" step="any" inputmode="decimal" data-pay="cell" data-r="${esc(r.id)}" data-f="${f}" value="${r[f] ?? ''}">`}</td>`).join('')}<td data-o="actual">${fmt(c.actual)}</td><td data-o="otAmt">${fmt(c.otAmt)}</td><td data-o="ded">${fmt(c.ded)}</td><td data-o="net" class="net">${fmt(c.net)}</td><td class="noprint">${closed ? '' : `<button class="btn sm danger" data-act="payDelRow" data-id="${esc(r.id)}" title="حذف الصف">×</button>`}</td></tr>`;
+      return `<tr data-row="${esc(r.id)}"><td>${i + 1}</td><td class="nm">${esc(r.name)}</td><td>${esc(r.role || '')}</td>${IN.map(([f]) => `<td>${closed ? fmt(r[f]) : `<input class="num" type="number" step="any" inputmode="decimal" data-pay="cell" data-r="${esc(r.id)}" data-f="${f}" value="${r[f] ?? ''}">`}</td>`).join('')}<td data-o="actual">${fmt(c.actual)}</td><td data-o="otAmt">${fmt(c.otAmt)}</td><td data-o="ded">${fmt(c.ded)}</td><td data-o="net" class="net">${fmt(c.net)}</td><td class="noprint">${closed ? '' : statSel(r.eid)}</td></tr>`;
     }).join('');
     return `<div class="card">${bar1}${bar2}
       <h2 class="print-only">كشف رواتب معلمي القرآن الكريم - شهر (${st.m}) ${st.y}</h2>
@@ -87,7 +89,7 @@ const V = {
   },
   emps() {
     const { esc, empty } = Q(), p = P();
-    const rows = p.employees.map(e => `<tr><td>${esc(e.code || '')}</td><td>${esc(e.name)}</td><td>${esc(e.role || '')}</td><td>${esc(e.sys || '—')}</td><td>${e.status === 'متوقف' ? '<span class="tag">متوقف</span>' : 'نشط'}</td><td>${fmt(e.basic)}</td><td>${fmt(e.rate)}</td><td>${fmt(e.incentive)}</td><td>${fmt(e.transport)}</td><td>${fmt(e.hours)}</td><td><button class="btn sm" data-act="payEditEmp" data-id="${esc(e.id)}">تعديل</button><button class="btn sm danger" data-act="payDelEmp" data-id="${esc(e.id)}">حذف</button></td></tr>`).join('');
+    const rows = p.employees.map(e => `<tr><td>${esc(e.code || '')}</td><td>${esc(e.name)}</td><td>${esc(e.role || '')}</td><td>${esc(e.sys || '—')}</td><td>${e.status === 'متوقف' ? '<span class="tag tag-no">متوقف</span>' : 'عامل'}</td><td>${fmt(e.basic)}</td><td>${fmt(e.rate)}</td><td>${fmt(e.incentive)}</td><td>${fmt(e.transport)}</td><td>${fmt(e.hours)}</td><td><button class="btn sm" data-act="payEditEmp" data-id="${esc(e.id)}">تعديل</button>${statSel(e.id)}</td></tr>`).join('');
     return `<div class="card"><div class="bar"><h2 class="grow" style="margin:0">موظفو المرتبات (${p.employees.length})</h2><button class="btn primary" data-act="payAddEmp">+ موظف</button></div>
       <div class="note">هذه هي الأسعار الحالية. تُنسخ إلى الشهر عند إنشائه وتبقى ثابتة فيه، فالزيادة الجديدة لا تغيّر الشهور السابقة.</div>
       <div class="bar"><label class="btn" style="margin:0">استيراد الموظفين من ملف الرواتب (Excel)<input type="file" accept=".xlsx" data-pay="importXlsx" hidden></label><span class="muted" style="font-size:.85rem">الأسماء من شيت «خلاصة»، والتفاصيل (الوظيفة والأساسي وسعر الإضافي والحافز والبدل) من «رواتب»، ونظام العمل من «تقرير».</span></div>
@@ -217,7 +219,7 @@ function empForm(e) {
     { name: 'code', label: 'الكود', value: e.code }, { name: 'name', label: 'الاسم', value: e.name || '', required: true },
     { name: 'role', label: 'الوظيفة', type: 'select', value: e.role, options: ROLES.map(x => ({ v: x, l: x })) },
     { name: 'sys', label: 'نظام العمل', type: 'select', value: e.sys || '', options: [{ v: '', l: '—' }, ...SYS.map(x => ({ v: x, l: x }))] },
-    { name: 'status', label: 'الحالة', type: 'select', value: e.status, options: [{ v: 'نشط', l: 'نشط' }, { v: 'متوقف', l: 'متوقف' }] },
+    { name: 'status', label: 'الحالة', type: 'select', value: e.status, options: [{ v: 'نشط', l: 'عامل' }, { v: 'متوقف', l: 'متوقف' }] },
     { name: 'basic', label: 'الأساسي', type: 'number', value: e.basic ?? '' }, { name: 'rate', label: 'سعر ساعة الإضافي', type: 'number', value: e.rate ?? '' },
     { name: 'incentive', label: 'الحافز', type: 'number', value: e.incentive ?? '' }, { name: 'transport', label: 'بدل الانتقال', type: 'number', value: e.transport ?? '' },
     { name: 'hours', label: 'الساعات الأساسية', type: 'number', value: e.hours ?? '' }, { name: 'place', label: 'مكان العمل', value: e.place || '' },
@@ -225,7 +227,11 @@ function empForm(e) {
   ], v => {
     const name = v.name.trim();
     if (p.employees.some(x => x.id !== e.id && Q().norm(x.name) === Q().norm(name))) return 'يوجد موظف بالاسم نفسه';
-    Object.assign(e, { code: v.code.trim(), name, role: v.role, sys: v.sys, status: v.status, place: v.place.trim(), note: v.note.trim() });
+    const isNew = !p.employees.includes(e), changed = !isNew && v.status !== e.status;
+    Object.assign(e, { code: v.code.trim(), name, role: v.role, sys: v.sys, place: v.place.trim(), note: v.note.trim() });
+    if (isNew) e.status = v.status;
+    /* تغيير حالة موظف موجود يمر بالمسار الموحّد: الخروج من الشهر المفتوح (أو العودة إليه) وإيقاف حساب المعلم المرتبط */
+    else if (changed) setTimeout(() => window.setWorkStatus ? window.setWorkStatus({ empId: e.id }, v.status === 'متوقف') : (e.status = v.status), 0);
     ['basic', 'rate', 'incentive', 'transport', 'hours'].forEach(k => { e[k] = v[k] === '' ? null : +v[k]; });
     if (isNew) p.employees.push(e);
   });
@@ -253,8 +259,8 @@ const act = {
     Q().save(); Q().render(); Q().toast(`تم إنشاء شهر (${st.m}) ${st.y} لـ ${act.length} موظف`);
   },
   payAddRow: () => {
-    const p = P(), have = new Set(monthRows(st.y, st.m).map(r => r.eid)), list = p.employees.filter(e => !have.has(e.id));
-    if (!list.length) { Q().toast('كل الموظفين موجودون في هذا الشهر'); return; }
+    const p = P(), have = new Set(monthRows(st.y, st.m).map(r => r.eid)), list = p.employees.filter(e => !have.has(e.id) && e.status !== 'متوقف');
+    if (!list.length) { Q().toast('كل الموظفين العاملين موجودون في هذا الشهر (المتوقف يُعاد من «المعلمون ← المتوقفون»)'); return; }
     Q().openForm('إضافة موظف لشهر (' + st.m + ')', [{ name: 'eid', label: 'الموظف', type: 'select', options: empOpts(list) }], v => { p.rows.push(rowFrom(emp(v.eid), st.y, st.m, prevMonthRows(st.y, st.m))); });
   },
   payDelRow: d => Q().ask('حذف هذا الصف من الشهر؟', () => { const p = P(); p.rows = p.rows.filter(r => r.id !== d.id); Q().save(); Q().render(); }),
@@ -369,7 +375,7 @@ async function importPayrollXlsx(file) {
   const isNew = x => !p.employees.some(e => norm(e.name) === norm(x.name));
   const nNew = list.filter(isNew).length, nUpd = list.length - nNew;
   const missing = p.employees.filter(e => !list.some(x => norm(x.name) === norm(e.name)));
-  ask(`استيراد ${list.length} موظفًا من شيت «خلاصة»: ${nNew} جديد، و${nUpd} موجود ستُحدَّث بياناته.${missing.length ? ` (${missing.length} موظف في التطبيق ليس في الشيت ولن يُمَس.)` : ''}`, () => {
+  ask(`استيراد ${list.length} موظفًا من شيت «خلاصة»: ${nNew} جديد، و${nUpd} موجود ستُحدَّث بياناته.${missing.length ? ` (${missing.length} موظف في التطبيق ليس في الشيت ولن يُمَس.)` : ''}`, () => {
     let code = p.employees.length;
     list.forEach(x => {
       const e = p.employees.find(y => norm(y.name) === norm(x.name));
@@ -377,7 +383,7 @@ async function importPayrollXlsx(file) {
       if (e) Object.assign(e, vals);
       else p.employees.push({ id: uid(), code: 'م' + String(++code).padStart(3, '0'), name: x.name, status: 'نشط', place: '', note: '', role: 'معلم', ...vals });
     });
-    save(); render(); toast(`تم: ${nNew} جديد و${nUpd} محدَّث`);
+    save(); render(); toast(`تم: ${nNew} جديد و${nUpd} محدَّث`);
   });
 }
 
@@ -468,5 +474,5 @@ document.addEventListener('change', e => {
   if (e.target.name === 'reason' && e.target.closest('#absform')) { absRead(); document.querySelector('#absform [data-other-reason]').hidden = e.target.value !== 'أخرى'; }
   else if (e.target.name === 'perm' && e.target.closest('#absform')) absRead();
 });
-window.Payroll = { view, absView, act, onInput, onChange, calc };
+window.Payroll = { view, absView, act, onInput, onChange, calc, newRow: (e, y, m) => rowFrom(e, y, m, prevMonthRows(y, m)), isClosed: (y, m) => isClosed(y, m) };
 })();
